@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="pl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0A1628" />
+
+    <!-- MUST-5: Content-Security-Policy
+         Meta CSP MUSI być przed <script> aby zadziałał. W produkcji preferuj
+         HTTP header (nginx/Cloudflare/Vercel), bo header obsługuje więcej dyrektyw
+         (np. frame-ancestors, report-to). Meta to fallback.
+
+         Co tu dopuszczamy:
+           default-src 'self'                          → wszystko z naszej domeny
+           script-src 'self'                           → tylko nasze JS-y
+           style-src 'self' 'unsafe-inline' Google     → fonts + style inline w JSX
+           font-src Google                             → Outfit + Plus Jakarta Sans
+           connect-src 'self' Supabase                 → API calls do Supabase
+           img-src 'self' data: https:                 → photo URLs z Drive/Dropbox
+           frame-ancestors 'none'                      → blokada clickjacking
+           upgrade-insecure-requests                   → wymuszenie HTTPS
+
+         Jeśli dodasz integrację (Stripe, Sentry itd.) — rozszerz connect-src.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self';
+      script-src 'self';
+      style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+      font-src 'self' https://fonts.gstatic.com;
+      connect-src 'self' https://*.supabase.co;
+      img-src 'self' data: https:;
+      frame-ancestors 'none';
+      base-uri 'self';
+      form-action 'self';
+      upgrade-insecure-requests;
+    " />
+
+    <!-- Inne security headers (działają tylko jako HTTP headers, ale dokumentuję
+         tu jako TODO dla nginx/Cloudflare):
+           X-Frame-Options: DENY
+           X-Content-Type-Options: nosniff
+           Referrer-Policy: strict-origin-when-cross-origin
+           Permissions-Policy: geolocation=(), microphone=(), camera=()
+    -->
+
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>VelarFlow — Property Management Suite</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
