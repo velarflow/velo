@@ -1606,9 +1606,12 @@ const Loans = {
     return entry;
   },
 
-  markReturned(id) {
+  markReturned(id, opts = {}) {
+    // FIX 3.C — opcjonalna data zwrotu + notatka (domyślnie: teraz, bez notatki).
+    // Wstecznie kompatybilne: dotychczasowi wołający markReturned(id) działają bez zmian.
+    const returnedAt = opts.returnedAt ? new Date(opts.returnedAt).toISOString() : new Date().toISOString();
     this.save(this.getAll().map(l =>
-      l.id === id ? { ...l, status: "returned", returnedAt: new Date().toISOString() } : l
+      l.id === id ? { ...l, status: "returned", returnedAt, returnNote: (opts.note || "").trim() } : l
     ));
   },
 
@@ -3890,10 +3893,18 @@ const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
     const list = Array.isArray(stored) ? stored : STANDARD_EQUIPMENT;
     return list.map(e => e.name);
   };
-  // Pozycje do wyboru: jeśli wybrano „skąd" → tylko z tego apartamentu;
+  // FIX 3.B — nazwy aktualnie wypożyczone (aktywnie) z danego apartamentu = niedostępne.
+  const borrowedNamesFor = (aptId) => new Set(
+    loans.filter(l => l.status === "active" && l.fromAptId === Number(aptId))
+      .flatMap(l => (l.items || []).map(it => it.name))
+  );
+  // Pozycje do wyboru: jeśli wybrano „skąd" → tylko z tego apartamentu i tylko wolne;
   // jeśli nie → pełna lista (suma wyposażenia wszystkich apartamentów).
   const itemOptions = (() => {
-    if (form.fromAptId) return equipNamesFor(Number(form.fromAptId));
+    if (form.fromAptId) {
+      const borrowed = borrowedNamesFor(form.fromAptId);
+      return equipNamesFor(Number(form.fromAptId)).filter(n => !borrowed.has(n));
+    }
     const set = new Set();
     apartments.forEach(a => equipNamesFor(a.id).forEach(n => set.add(n)));
     return [...set].sort((a, b) => a.localeCompare(b, "pl"));
@@ -3922,6 +3933,10 @@ const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
     const haveNames = equipNamesFor(Number(form.fromAptId));
     const missing = items.filter(i => !haveNames.includes(i.name.trim()));
     if (missing.length) { setError(`Apartament źródłowy nie ma na wyposażeniu: ${missing.map(m => m.name).join(", ")}`); return; }
+    // FIX 3.B — nie można wypożyczyć pozycji, która jest już aktywnie wypożyczona z tego apartamentu
+    const borrowed = borrowedNamesFor(form.fromAptId);
+    const taken = items.filter(i => borrowed.has(i.name.trim()));
+    if (taken.length) { setError(`Już wypożyczone z apartamentu źródłowego: ${taken.map(t => t.name).join(", ")}`); return; }
 
     const entry = Loans.add({
       fromAptId: form.fromAptId,
@@ -4099,6 +4114,11 @@ const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
               {!form.fromAptId && (
                 <div style={{ fontSize:11, color:"var(--text2)", marginBottom:6 }}>
                   Lista wszystkich pozycji ze wszystkich apartamentów — po wyborze pozycji lista „skąd" zawęzi się do apartamentów, które ją mają.
+                </div>
+              )}
+              {form.fromAptId && itemOptions.length === 0 && (
+                <div style={{ fontSize:11, color:"var(--text2)", marginBottom:6 }}>
+                  Brak wolnego wyposażenia do pożyczenia z tego apartamentu (wszystko jest już wypożyczone).
                 </div>
               )}
               {form.items.map((item, idx) => {
@@ -4497,6 +4517,10 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
   const [newRoomName, setNewRoomName] = useState("");
   const [newRoomAptId, setNewRoomAptId] = useState(""); // "" = global
   const refreshRooms = () => setEqRooms(EquipmentRooms.getAll());
+  // FIX 3.A — usuwanie wbudowanych kategorii pomieszczeń (podwójne potwierdzenie)
+  const [roomDeleteStep1, setRoomDeleteStep1] = useState(null); // room — pierwsze ostrzeżenie
+  const [roomDeleteStep2, setRoomDeleteStep2] = useState(null); // room — przepisanie nazwy
+  const [roomDeleteText,  setRoomDeleteText]  = useState("");
 
   // ── Zespół — osoby dowodzące sprzątaniem ──────────────────────────────
   const [leaders, setLeaders] = useState(() => Settings.getCleaningLeaders());
@@ -4557,6 +4581,30 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
     if (!isManager) return;
     EquipmentRooms.remove(id);
     refreshRooms();
+  };
+
+  // FIX 3.A — kasuje wbudowaną kategorię i przenosi pozycje wyposażenia z tą kategorią
+  // do „Niestandardowe" we wszystkich apartamentach. Pożyczki trzymają nazwy pozycji
+  // (nie kategorii), więc pozostają nietknięte.
+  const deleteBuiltinRoom = (room) => {
+    if (!isManager || !room) return;
+    EquipmentRooms.remove(room.id);
+    let movedItems = 0, touchedApts = 0;
+    (apartments || []).forEach(a => {
+      const eq = Storage.get(`apt_equip_${a.id}`);
+      if (!Array.isArray(eq)) return;
+      let changed = false;
+      const next = eq.map(it => {
+        if (it.cat === room.name) { changed = true; movedItems++; return { ...it, cat: "Niestandardowe" }; }
+        return it;
+      });
+      if (changed) { Storage.set(`apt_equip_${a.id}`, next); touchedApts++; }
+    });
+    Audit.log("EQUIPMENT_DELETE_BUILTIN", currentUser, { item: room.name, movedItems, apartments: touchedApts });
+    refreshRooms();
+    setRoomDeleteStep1(null);
+    setRoomDeleteStep2(null);
+    setRoomDeleteText("");
   };
 
   // ── Kategorie pozycji ─────────────────────────────────────────────────────
@@ -4848,6 +4896,10 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
                   {isManager && !room.builtin && (
                     <button onClick={() => deleteRoom(room.id)} style={{ background:"rgba(239,68,68,0.12)", border:"none", borderRadius:8, padding:"6px 10px", cursor:"pointer", color:"var(--red)", fontSize:11, fontWeight:700 }}>🗑</button>
                   )}
+                  {/* FIX 3.A — wbudowane też można usunąć (tylko manager), ale dopiero po podwójnym potwierdzeniu; mocniejszy czerwony */}
+                  {isManager && room.builtin && (
+                    <button onClick={() => { setRoomDeleteText(""); setRoomDeleteStep1(room); }} title="Usuń wbudowaną kategorię (wymaga podwójnego potwierdzenia)" style={{ background:"var(--red)", border:"none", borderRadius:8, padding:"6px 12px", cursor:"pointer", color:"#fff", fontSize:11, fontWeight:700 }}>🗑 Usuń</button>
+                  )}
                 </div>
               ))}
             </div>
@@ -4892,6 +4944,54 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
               );
             })()}
           </div>
+        )}
+
+        {/* FIX 3.A — Krok 1: ostrzeżenie przed usunięciem wbudowanej kategorii */}
+        {roomDeleteStep1 && (
+          <ConfirmModal
+            open
+            variant="danger"
+            title="Czy na pewno chcesz usunąć wbudowane wyposażenie?"
+            message={<>
+              <strong style={{ color:"var(--text)" }}>{roomDeleteStep1.name}</strong> jest pozycją wbudowaną — była częścią domyślnej konfiguracji aplikacji. Usunięcie spowoduje, że:<br /><br />
+              • Kategoria zniknie z list wyposażenia wszystkich apartamentów, które jej używają<br />
+              • Pozycje przypisane do tej kategorii zostaną przeniesione do „Niestandardowe"<br />
+              • Operacja jest nieodwracalna (nie ma „Cofnij")<br /><br />
+              Czy na pewno chcesz kontynuować?
+            </>}
+            confirmLabel="Tak, kontynuuj"
+            cancelLabel="Anuluj"
+            onClose={() => setRoomDeleteStep1(null)}
+            onConfirm={() => { const r = roomDeleteStep1; setRoomDeleteStep1(null); setRoomDeleteText(""); setRoomDeleteStep2(r); }}
+          />
+        )}
+
+        {/* FIX 3.A — Krok 2: ostateczne potwierdzenie z przepisaniem nazwy (case-sensitive) */}
+        {roomDeleteStep2 && (
+          <FloatingModal open onClose={() => { setRoomDeleteStep2(null); setRoomDeleteText(""); }} title="Ostateczne potwierdzenie" size="sm">
+            <p style={{ fontSize:14, lineHeight:1.6, marginBottom:12 }}>
+              Wpisz nazwę elementu poniżej, żeby potwierdzić usunięcie:<br />
+              <strong style={{ color:"var(--red)" }}>{roomDeleteStep2.name}</strong>
+            </p>
+            <input
+              className="form-input"
+              autoFocus
+              value={roomDeleteText}
+              onChange={e => setRoomDeleteText(e.target.value)}
+              placeholder="Wpisz dokładną nazwę…"
+              style={{ width:"100%", boxSizing:"border-box", marginBottom:14 }}
+              onKeyDown={e => { if (e.key === "Enter" && roomDeleteText === roomDeleteStep2.name) deleteBuiltinRoom(roomDeleteStep2); }}
+            />
+            <div className="btn-row" style={{ display:"flex", gap:10 }}>
+              <button className="btn btn-ghost" style={{ flex:1 }} onClick={() => { setRoomDeleteStep2(null); setRoomDeleteText(""); }}>Anuluj</button>
+              <button
+                className="btn"
+                disabled={roomDeleteText !== roomDeleteStep2.name}
+                onClick={() => deleteBuiltinRoom(roomDeleteStep2)}
+                style={{ flex:1, border:"none", fontWeight:700, background: roomDeleteText === roomDeleteStep2.name ? "var(--red)" : "var(--surface2)", color: roomDeleteText === roomDeleteStep2.name ? "#fff" : "var(--text2)", cursor: roomDeleteText === roomDeleteStep2.name ? "pointer" : "not-allowed" }}
+              >Usuń definitywnie</button>
+            </div>
+          </FloatingModal>
         )}
 
         {/* ═══ ZESPÓŁ — konfiguracja osób dowodzących ═══ */}
@@ -5516,6 +5616,12 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
   // ── Pożyczki — formularz z tego apt ────────────────────────────────────
   const [showLoanForm, setShowLoanForm] = useState(false);
   const [loanForm, setLoanForm] = useState({ toAptId: "", items: [{ name: "", qty: 1 }], notes: "" });
+  // FIX 3.C — widok pożyczek w detalu: aktywne vs historia
+  const [loansShowAll,    setLoansShowAll]    = useState(true);  // false = pokaż tylko aktywne
+  const [loanHistoryOpen, setLoanHistoryOpen] = useState(false); // sekcja historii rozwinięta
+  const [returnModal, setReturnModal] = useState(null); // pożyczka oznaczana jako zwrócona
+  const [returnDate,  setReturnDate]  = useState("");
+  const [returnNote,  setReturnNote]  = useState("");
   const addLoanLine = () => setLoanForm(f => ({ ...f, items: [...f.items, { name: "", qty: 1 }] }));
   const removeLoanLine = (idx) => setLoanForm(f => ({ ...f, items: f.items.length > 1 ? f.items.filter((_, i) => i !== idx) : f.items }));
   const updateLoanLine = (idx, p) => setLoanForm(f => ({ ...f, items: f.items.map((l, i) => i === idx ? { ...l, ...p } : l) }));
@@ -5530,6 +5636,34 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
     setLoanForm({ toAptId: "", items: [{ name: "", qty: 1 }], notes: "" });
     setLoanError("");
     onRefreshLoans && onRefreshLoans(); // Notify parent to refresh loans state
+  };
+
+  // FIX 3.B — pozycje dostępne do pożyczenia z tego apartamentu = wyposażenie MINUS
+  // pozycje już aktywnie wypożyczone na zewnątrz (nie można wypożyczyć tego samego dwa razy).
+  const borrowedOutNames = new Set(
+    (loans || [])
+      .filter(l => l.status === "active" && l.fromAptId === apt.id)
+      .flatMap(l => (l.items || []).map(it => it.name))
+  );
+  const availableEquipNames = [...new Set((equipment || []).map(e => e.name))].filter(n => !borrowedOutNames.has(n));
+
+  // FIX 3.C — oznaczanie zwrotu + usuwanie pożyczki z poziomu detalu
+  const aptNameOf = (id) => ((apartments || []).find(a => a.id === id) || {}).name || "—";
+  const openReturnModal = (loan) => {
+    setReturnDate(new Date().toISOString().slice(0, 10));
+    setReturnNote("");
+    setReturnModal(loan);
+  };
+  const confirmReturn = () => {
+    if (!returnModal) return;
+    Loans.markReturned(returnModal.id, { returnedAt: returnDate, note: returnNote });
+    setReturnModal(null);
+    onRefreshLoans && onRefreshLoans();
+  };
+  const deleteLoanFromDetail = (id) => {
+    if (!isManager) return;
+    Loans.remove(id);
+    onRefreshLoans && onRefreshLoans();
   };
 
   // Zamówienia: multi-item w jednym zamówieniu
@@ -6331,11 +6465,24 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
         />
       )}
 
-      {/* ── POŻYCZKI (z/do tego apartamentu) ── */}
-      {tab === "loans" && (
+      {/* ── POŻYCZKI (z/do tego apartamentu) — FIX 3.C: aktywne vs historia ── */}
+      {tab === "loans" && (() => {
+        const activeLoans  = aptLoans.filter(l => l.status === "active");
+        const historyLoans = aptLoans.filter(l => l.status === "returned")
+          .sort((a, b) => (b.returnedAt || "").localeCompare(a.returnedAt || ""));
+        // Kierunek pożyczki względem tego apartamentu (wychodząca / przychodząca)
+        const dirLabel = (loan) => loan.fromAptId === apt.id
+          ? { icon:"📤", text:`Pożyczone DO: ${aptNameOf(loan.toAptId)}` }
+          : { icon:"📥", text:`Pożyczone OD: ${aptNameOf(loan.fromAptId)}` };
+
+        return (
         <div className="detail-section">
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
-            <div className="detail-section-title" style={{ marginBottom:0 }}><Icon name="swap" size={14} />Pożyczki wyposażenia</div>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12, gap:8, flexWrap:"wrap" }}>
+            <div className="detail-section-title" style={{ marginBottom:0, display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+              <Icon name="swap" size={14} />Pożyczki wyposażenia
+              <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.06em", padding:"2px 8px", borderRadius:20, background:"rgba(59,130,246,0.15)", color:"var(--accent)" }}>{activeLoans.length} aktywne</span>
+              <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.06em", padding:"2px 8px", borderRadius:20, background:"var(--surface2)", color:"var(--text2)" }}>{historyLoans.length} w historii</span>
+            </div>
             {canEdit && !showLoanForm && (
               <button className="btn btn-primary" style={{ padding:"6px 14px", fontSize:11 }} onClick={() => setShowLoanForm(true)}>
                 + Nowa pożyczka
@@ -6343,7 +6490,7 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
             )}
           </div>
 
-          {/* Formularz nowej pożyczki z tego apt */}
+          {/* Formularz nowej pożyczki z tego apt (FIX 3.B: tylko WOLNE wyposażenie tego apartamentu) */}
           {showLoanForm && canEdit && (
             <div style={{ padding:14, background:"var(--surface2)", border:"1px solid var(--accent)", borderRadius:10, marginBottom:16 }}>
               <div style={{ fontSize:11, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:12 }}>
@@ -6357,24 +6504,31 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
                 </select>
               </div>
               <div className="form-group">
-                <label className="form-label">Pozycje</label>
-                {/* FIX 1.7 — pozycje ograniczone do wyposażenia TEGO apartamentu (źródło stałe).
-                    Nie da się wypożyczyć rzeczy, której apartament nie ma na wyposażeniu. */}
-                {loanForm.items.map((item, idx) => {
-                  const aptEquipNames = [...new Set((equipment || []).map(e => e.name))];
-                  const opts = item.name && !aptEquipNames.includes(item.name) ? [item.name, ...aptEquipNames] : aptEquipNames;
-                  return (
-                  <div key={idx} style={{ display:"flex", gap:6, marginBottom:6 }}>
-                    <select className="form-select" style={{ flex:1 }} value={item.name} onChange={e => updateLoanLine(idx, { name: e.target.value })}>
-                      <option value="">— wybierz pozycję —</option>
-                      {opts.map(n => <option key={n} value={n}>{n}</option>)}
-                    </select>
-                    <NumberInput className="form-input" style={{ width:60 }} steppers={false} min={1} value={item.qty} onChange={v => updateLoanLine(idx, { qty: v })} />
-                    {loanForm.items.length > 1 && <button onClick={() => removeLoanLine(idx)} style={{ background:"rgba(239,68,68,0.1)", border:"none", borderRadius:8, padding:"0 10px", color:"var(--red)", cursor:"pointer" }}>−</button>}
+                <label className="form-label">Pozycje (tylko wolne wyposażenie tego apartamentu)</label>
+                {/* FIX 1.7 + 3.B — pozycje ograniczone do wyposażenia TEGO apartamentu, z pominięciem
+                    tych już aktywnie wypożyczonych. Nie da się wypożyczyć tego samego dwa razy. */}
+                {availableEquipNames.length === 0 ? (
+                  <div style={{ fontSize:12, color:"var(--text2)", padding:"8px 10px", background:"var(--surface)", border:"1px dashed var(--border)", borderRadius:8 }}>
+                    Brak wolnego wyposażenia do pożyczenia z tego apartamentu (wszystko jest już wypożyczone albo lista wyposażenia jest pusta).
                   </div>
-                  );
-                })}
-                <button onClick={addLoanLine} style={{ background:"none", border:"1px dashed var(--border)", borderRadius:8, padding:"6px 12px", color:"var(--text2)", fontSize:11, fontWeight:600, cursor:"pointer", width:"100%", marginTop:4 }}>+ Kolejna pozycja</button>
+                ) : (
+                  <>
+                    {loanForm.items.map((item, idx) => {
+                      const opts = item.name && !availableEquipNames.includes(item.name) ? [item.name, ...availableEquipNames] : availableEquipNames;
+                      return (
+                      <div key={idx} style={{ display:"flex", gap:6, marginBottom:6 }}>
+                        <select className="form-select" style={{ flex:1 }} value={item.name} onChange={e => updateLoanLine(idx, { name: e.target.value })}>
+                          <option value="">— wybierz pozycję —</option>
+                          {opts.map(n => <option key={n} value={n}>{n}</option>)}
+                        </select>
+                        <NumberInput className="form-input" style={{ width:60 }} steppers={false} min={1} value={item.qty} onChange={v => updateLoanLine(idx, { qty: v })} />
+                        {loanForm.items.length > 1 && <button onClick={() => removeLoanLine(idx)} style={{ background:"rgba(239,68,68,0.1)", border:"none", borderRadius:8, padding:"0 10px", color:"var(--red)", cursor:"pointer" }}>−</button>}
+                      </div>
+                      );
+                    })}
+                    <button onClick={addLoanLine} style={{ background:"none", border:"1px dashed var(--border)", borderRadius:8, padding:"6px 12px", color:"var(--text2)", fontSize:11, fontWeight:600, cursor:"pointer", width:"100%", marginTop:4 }}>+ Kolejna pozycja</button>
+                  </>
+                )}
               </div>
               <div className="form-group">
                 <label className="form-label">Notatki</label>
@@ -6382,7 +6536,7 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
               </div>
               {loanError && <div style={{ padding:"6px 10px", background:"rgba(239,68,68,0.12)", borderRadius:8, fontSize:12, color:"var(--red)", marginBottom:8, fontWeight:600 }}>{loanError}</div>}
               <div style={{ display:"flex", gap:8 }}>
-                <button className="btn btn-primary" style={{ flex:1, fontSize:12 }} onClick={submitLoan}>✓ Utwórz pożyczkę</button>
+                <button className="btn btn-primary" style={{ flex:1, fontSize:12, opacity: availableEquipNames.length === 0 ? 0.5 : 1, cursor: availableEquipNames.length === 0 ? "not-allowed" : "pointer" }} disabled={availableEquipNames.length === 0} onClick={submitLoan}>✓ Utwórz pożyczkę</button>
                 <button className="btn" style={{ flex:1, fontSize:12 }} onClick={() => { setShowLoanForm(false); setLoanError(""); }}>Anuluj</button>
               </div>
             </div>
@@ -6394,71 +6548,110 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
             </p>
           ) : (
             <>
-              {/* Wypożyczone Z tego apartamentu (outgoing) */}
-              {(() => {
-                const outgoing = aptLoans.filter(l => l.fromAptId === apt.id);
-                if (outgoing.length === 0) return null;
+              {/* Toggle widoku: tylko aktywne / wszystkie */}
+              <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:12 }}>
+                <button
+                  onClick={() => setLoansShowAll(v => !v)}
+                  style={{ background:"none", border:"1px solid var(--border)", borderRadius:8, padding:"5px 12px", color:"var(--text2)", fontSize:11, fontWeight:700, cursor:"pointer" }}
+                >{loansShowAll ? "Pokaż tylko aktywne" : "Pokaż wszystkie"}</button>
+              </div>
+
+              {/* SEKCJA 1 — AKTYWNE (wyróżnione akcentem po lewej) */}
+              <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>
+                Aktywne pożyczki ({activeLoans.length})
+              </div>
+              {activeLoans.length === 0 && (
+                <p style={{ color:"var(--text2)", fontSize:13, padding:"4px 0 12px" }}>Brak aktywnych pożyczek.</p>
+              )}
+              {activeLoans.map(loan => {
+                const d = dirLabel(loan);
                 return (
-                  <div style={{ marginBottom:16 }}>
-                    <div style={{ fontSize:10, color:"var(--yellow)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>
-                      Wypożyczone z tego apartamentu ({outgoing.length})
+                  <div key={loan.id} style={{ background:"var(--surface2)", border:"1px solid rgba(59,130,246,0.25)", borderLeft:"3px solid var(--accent)", borderRadius:10, padding:14, marginBottom:8 }}>
+                    <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, marginBottom:8, flexWrap:"wrap" }}>
+                      <div style={{ fontSize:13, fontWeight:700 }}>
+                        {loan.items.map(it => `${it.name} × ${it.qty}`).join(", ")}
+                      </div>
+                      <span style={{ fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:4, background:"rgba(245,158,11,0.15)", color:"var(--yellow)" }}>AKTYWNA</span>
                     </div>
-                    {outgoing.map(loan => {
-                      const toApt = (apartments || []).find(a => a.id === loan.toAptId);
-                      return (
-                        <div key={loan.id} style={{ background:"var(--surface2)", border:`1px solid ${loan.status==="active"?"var(--yellow)":"var(--green)"}33`, borderLeft:`3px solid ${loan.status==="active"?"var(--yellow)":"var(--green)"}`, borderRadius:10, padding:12, marginBottom:6 }}>
-                          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
-                            <span style={{ fontSize:13, fontWeight:700 }}>→ {toApt && toApt.name || "?"}</span>
-                            <span style={{ fontSize:10, fontWeight:700, padding:"2px 6px", borderRadius:4, background:loan.status==="active"?"rgba(245,158,11,0.15)":"rgba(34,197,94,0.15)", color:loan.status==="active"?"var(--yellow)":"var(--green)" }}>
-                              {loan.status === "active" ? "AKTYWNA" : "ZWRÓCONA"}
-                            </span>
-                          </div>
-                          {loan.items.map((it, i) => (
-                            <div key={i} style={{ fontSize:12, padding:"2px 0" }}>• {it.name} × {it.qty}</div>
-                          ))}
-                          <div style={{ fontSize:10, color:"var(--text2)", marginTop:4 }}>
-                            {loan.borrowedAt && loan.borrowedAt.slice(0,10)}{loan.returnedAt && ` → ${loan.returnedAt.slice(0,10)}`}
-                          </div>
-                        </div>
-                      );
-                    })}
+                    <div style={{ borderTop:"1px solid var(--border)", paddingTop:8, fontSize:12, color:"var(--text2)", lineHeight:1.8 }}>
+                      <div>{d.icon} {d.text}</div>
+                      {loan.createdBy && <div>👤 Wzięte przez: {loan.createdBy}</div>}
+                      <div>📅 Od: {loan.borrowedAt && loan.borrowedAt.slice(0,10)}</div>
+                      {loan.notes && <div>📝 Notatka: „{loan.notes}"</div>}
+                    </div>
+                    {canEdit && (
+                      <div style={{ display:"flex", gap:8, marginTop:10 }}>
+                        <button onClick={() => openReturnModal(loan)} style={{ flex:1, background:"rgba(34,197,94,0.15)", color:"var(--green)", border:"1px solid rgba(34,197,94,0.3)", borderRadius:8, padding:"8px 12px", fontSize:11, fontWeight:700, letterSpacing:"0.06em", cursor:"pointer" }}>✓ Oznacz jako zwrócone</button>
+                        {isManager && (
+                          <button onClick={() => deleteLoanFromDetail(loan.id)} title="Usuń pożyczkę" style={{ background:"rgba(239,68,68,0.1)", border:"1px solid rgba(239,68,68,0.3)", borderRadius:8, padding:"6px 10px", cursor:"pointer", color:"var(--red)" }}><Icon name="trash" size={12} /></button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
-              })()}
-              {/* Wypożyczone DO tego apartamentu (incoming) */}
-              {(() => {
-                const incoming = aptLoans.filter(l => l.toAptId === apt.id);
-                if (incoming.length === 0) return null;
-                return (
-                  <div>
-                    <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:8 }}>
-                      Wypożyczone do tego apartamentu ({incoming.length})
-                    </div>
-                    {incoming.map(loan => {
-                      const fromApt = (apartments || []).find(a => a.id === loan.fromAptId);
-                      return (
-                        <div key={loan.id} style={{ background:"var(--surface2)", border:`1px solid ${loan.status==="active"?"var(--accent)":"var(--green)"}33`, borderLeft:`3px solid ${loan.status==="active"?"var(--accent)":"var(--green)"}`, borderRadius:10, padding:12, marginBottom:6 }}>
-                          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
-                            <span style={{ fontSize:13, fontWeight:700 }}>← {fromApt && fromApt.name || "?"}</span>
-                            <span style={{ fontSize:10, fontWeight:700, padding:"2px 6px", borderRadius:4, background:loan.status==="active"?"rgba(59,130,246,0.15)":"rgba(34,197,94,0.15)", color:loan.status==="active"?"var(--accent)":"var(--green)" }}>
-                              {loan.status === "active" ? "AKTYWNA" : "ZWRÓCONA"}
-                            </span>
-                          </div>
-                          {loan.items.map((it, i) => (
-                            <div key={i} style={{ fontSize:12, padding:"2px 0" }}>• {it.name} × {it.qty}</div>
-                          ))}
-                          <div style={{ fontSize:10, color:"var(--text2)", marginTop:4 }}>
-                            {loan.borrowedAt && loan.borrowedAt.slice(0,10)}{loan.returnedAt && ` → ${loan.returnedAt.slice(0,10)}`}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              })()}
+              })}
+
+              {/* SEKCJA 2 — HISTORIA ZWROTÓW (domyślnie zwinięta) */}
+              {loansShowAll && (
+                <div style={{ marginTop:16 }}>
+                  <button
+                    onClick={() => setLoanHistoryOpen(v => !v)}
+                    style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 12px", cursor:"pointer", color:"var(--text2)", fontSize:10, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase" }}
+                  >
+                    <span>Historia zwrotów ({historyLoans.length})</span>
+                    <span>{loanHistoryOpen ? "▲ zwiń" : "▼ rozwiń"}</span>
+                  </button>
+                  {loanHistoryOpen && (
+                    historyLoans.length === 0 ? (
+                      <p style={{ color:"var(--text2)", fontSize:13, padding:"10px 0" }}>Brak zwróconych pożyczek.</p>
+                    ) : (
+                      <div style={{ marginTop:8 }}>
+                        {historyLoans.map(loan => {
+                          const d = dirLabel(loan);
+                          return (
+                            <div key={loan.id} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderLeft:"3px solid var(--green)", borderRadius:8, padding:"10px 12px", marginBottom:6, fontSize:12 }}>
+                              <div style={{ display:"flex", justifyContent:"space-between", gap:8, flexWrap:"wrap" }}>
+                                <span style={{ fontWeight:600 }}>{loan.items.map(it => `${it.name} × ${it.qty}`).join(", ")}</span>
+                                <span style={{ color:"var(--text2)" }}>{d.text}</span>
+                              </div>
+                              <div style={{ color:"var(--text2)", marginTop:4 }}>
+                                {loan.borrowedAt && loan.borrowedAt.slice(0,10)} – {loan.returnedAt && loan.returnedAt.slice(0,10)}
+                                {loan.returnNote && <> · 📝 „{loan.returnNote}"</>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )
+                  )}
+                </div>
+              )}
             </>
           )}
         </div>
+        );
+      })()}
+
+      {/* FIX 3.C — modal oznaczania pożyczki jako zwróconej */}
+      {returnModal && (
+        <FloatingModal open onClose={() => setReturnModal(null)} title="Oznacz pożyczkę jako zwróconą" size="sm">
+          <p style={{ fontSize:14, lineHeight:1.6, marginBottom:14 }}>
+            {returnModal.items.map(it => `${it.name} × ${it.qty}`).join(", ")} — pożyczone z <strong style={{ color:"var(--text)" }}>{aptNameOf(returnModal.fromAptId)}</strong> do <strong style={{ color:"var(--text)" }}>{aptNameOf(returnModal.toAptId)}</strong> dnia {returnModal.borrowedAt && returnModal.borrowedAt.slice(0,10)}.<br />
+            Czy element wrócił do <strong style={{ color:"var(--text)" }}>{aptNameOf(returnModal.fromAptId)}</strong>?
+          </p>
+          <div className="form-group">
+            <label className="form-label">Data zwrotu</label>
+            <input type="date" className="form-input" value={returnDate} onChange={e => setReturnDate(e.target.value)} style={{ width:"100%", boxSizing:"border-box" }} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Notatka (opcjonalna)</label>
+            <textarea className="form-textarea" value={returnNote} onChange={e => setReturnNote(e.target.value)} placeholder="np. stan dobry, zwrócone osobiście..." />
+          </div>
+          <div className="btn-row" style={{ display:"flex", gap:10 }}>
+            <button className="btn btn-ghost" style={{ flex:1 }} onClick={() => setReturnModal(null)}>Anuluj</button>
+            <button className="btn btn-primary" style={{ flex:1 }} disabled={!returnDate} onClick={confirmReturn}>Potwierdź zwrot</button>
+          </div>
+        </FloatingModal>
       )}
 
       {/* ── ZADANIA ── */}

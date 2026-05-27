@@ -13,7 +13,18 @@
       "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\);const fatal=r[0].messages.filter\\(m=>m.fatal\\);console.log\\('fatalCount=',fatal.length\\);fatal.forEach\\(m=>console.log\\(m.line,m.message\\)\\);}\\)\")",
       "Bash(awk 'NR>=4251 && NR<=4360' src/App.jsx)",
       "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\);const nu=r[0].messages.filter\\(m=>m.ruleId==='no-unused-vars'&&/FloatingModal|ConfirmModal|FileForm/.test\\(m.message\\)\\);nu.forEach\\(m=>console.log\\('  line',m.line+':',m.message\\)\\);}\\)\")",
-      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\);r[0].messages.filter\\(m=>m.ruleId==='no-unused-vars'&&/tasks|activeCount|OwnerDetail/.test\\(m.message\\)\\).forEach\\(m=>console.log\\(m.line+': '+m.message\\)\\);}\\)\")"
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\);r[0].messages.filter\\(m=>m.ruleId==='no-unused-vars'&&/tasks|activeCount|OwnerDetail/.test\\(m.message\\)\\).forEach\\(m=>console.log\\(m.line+': '+m.message\\)\\);}\\)\")",
+      "Bash(npx esbuild *)",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\)[0];const by={};r.messages.forEach\\(m=>{by[m.ruleId]=\\(by[m.ruleId]||0\\)+1}\\);console.log\\('CURRENT working tree by rule:'\\);console.log\\(by\\);}\\)\")",
+      "Bash(git stash *)",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\)[0];const by={};r.messages.forEach\\(m=>{by[m.ruleId]=\\(by[m.ruleId]||0\\)+1}\\);console.log\\('BASELINE \\(HEAD\\) by rule:'\\);console.log\\(by\\);console.log\\('total',r.messages.length\\);}\\)\")",
+      "Bash(rm -f build_check_tmp.js)",
+      "Bash(node -e \"const p=require\\('./package.json'\\);console.log\\('scripts:',JSON.stringify\\(p.scripts\\)\\)\")",
+      "Bash(npm install *)",
+      "Bash(node -e \"const p=require\\('./node_modules/vite/package.json'\\); console.log\\('vite deps:', JSON.stringify\\(p.dependencies, null, 0\\)\\); console.log\\('optionalDeps:', JSON.stringify\\(p.optionalDependencies||{}\\)\\)\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5179/)",
+      "Bash(node test_smoke.mjs)",
+      "PowerShell(Get-NetTCPConnection *)"
     ]
   }
 }
