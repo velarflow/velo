@@ -1625,6 +1625,20 @@ const FILE_CATEGORIES = [
   { id: "other",        label: "Inne" },
 ];
 
+const FILE_CAT_COLORS = {
+  contract:"var(--accent)", instruction:"var(--green)", invoice:"var(--yellow)",
+  photo:"#ec4899", other:"var(--text2)",
+};
+const fileCatLabel = (id) => ((FILE_CATEGORIES.find(c => c.id === id) || {}).label) || "Inne";
+
+// Polska odmiana rzeczownika przez liczbę: one=1, few=2–4, many=5+/0 (z wyjątkiem 12–14 → many)
+const plForm = (n, one, few, many) => {
+  const mod10 = n % 10, mod100 = n % 100;
+  if (n === 1) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
+  return many;
+};
+
 const Files = {
   _key: "files",  // MUST-4: bez prefiksu
 
@@ -2207,15 +2221,6 @@ const STATUS_COLORS = {
   "Dzisiaj wyjazd gości": "#f97316",
 };
 
-// Ikona statusu apartamentu w listach głównych (kolor brany z STATUS_COLORS)
-const STATUS_ICONS = {
-  "Wolny": "check",
-  "Zajęty": "user",
-  "Wolny/Dzisiaj przyjazd": "wave",
-  "Zajęty/Jutro się zwolni": "calendar",
-  "Dzisiaj wyjazd gości": "logout",
-};
-
 // APT_TYPE_COLORS — dynamiczny lookup z Categories module
 // Obsługuje dostęp przez "ZARZĄDZANIE" → zwraca color z kategorii
 // W starym kodzie używane jako APT_TYPE_COLORS["ZARZĄDZANIE"] albo APT_TYPE_COLORS[apt.status]
@@ -2455,7 +2460,6 @@ const styles = `
   [data-theme="light"] .sidebar-logo-text { color: var(--accent); }
   [data-theme="light"] .login-title { color: var(--text); }
   [data-theme="light"] .login-logo-text { color: var(--text); }
-  [data-theme="light"] .modal { background: #fff; }
   [data-theme="light"] .form-input, [data-theme="light"] .form-textarea, [data-theme="light"] .form-select {
     background: #f5f5f8; border-color: #d8d8e0; color: #1a1a2e;
   }
@@ -2688,7 +2692,7 @@ const styles = `
     position: sticky; top: 0; z-index: 50;
     border-bottom: 1px solid var(--border);
   }
-  .header h1 { font-family: var(--font-display); font-size: 26px; font-weight: 400; letter-spacing: 0.1em; text-transform: uppercase; flex: 1; line-height: 1; }
+  .header h1 { font-family: var(--font-display); font-size: 26px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; flex: 1; line-height: 1; color: var(--text); }
   .header-back { background: none; border: none; color: var(--text); cursor: pointer; padding: 4px; }
   .header-actions { display: flex; gap: 8px; }
   .icon-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--text); width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
@@ -2720,7 +2724,7 @@ const styles = `
   button.apt-ind:active { transform: scale(0.92); }
 
   .detail-hero { background: var(--surface); padding: 24px 20px; border-bottom: 1px solid var(--border); }
-  .detail-hero h2 { font-family: var(--font-display); font-size: 36px; font-weight: 400; letter-spacing: 0.08em; line-height: 1; }
+  .detail-hero h2 { font-family: var(--font-display); font-size: 36px; font-weight: 600; letter-spacing: 0.04em; line-height: 1.05; color: var(--text); }
   .detail-section { padding: 20px; border-bottom: 1px solid var(--border); }
   .detail-section-title { font-family: var(--font-body); font-size: 10px; font-weight: 700; color: var(--accent); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 16px; display: flex; align-items: center; gap: 6px; }
   .detail-row { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; }
@@ -2741,9 +2745,39 @@ const styles = `
   .task-assignee { font-size: 12px; color: var(--text2); display: flex; align-items: center; gap: 4px; }
   .avatar { width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #000; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
 
-  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 200; display: flex; align-items: flex-end; justify-content: center; }
-  .modal { background: var(--surface); border-radius: 24px 24px 0 0; width: 100%; max-width: 430px; max-height: 90vh; overflow-y: auto; padding: 24px 20px 40px; }
-  .modal-title { font-family: var(--font-display); font-size: 30px; font-weight: 400; letter-spacing: 0.08em; margin-bottom: 20px; line-height: 1; }
+  /* ─── FLOATING MODAL (FIX 2.A) — pływające na środku ekranu z backdropem ─── */
+  .fm-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(4px);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1000; padding: 24px;
+    animation: fm-fade-in 0.15s ease-out;
+  }
+  .fm-content {
+    background: var(--surface);
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    box-shadow: 0 24px 48px rgba(0,0,0,0.4);
+    max-height: 90vh; overflow-y: auto;
+    width: 100%; max-width: var(--fm-max-width, 600px);
+    animation: fm-scale-in 0.2s ease-out;
+  }
+  .fm-header { position: sticky; top: 0; z-index: 2; background: var(--surface); padding: 20px 24px 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .fm-title { font-family: var(--font-display); font-size: 22px; font-weight: 400; letter-spacing: 0.06em; color: var(--text); line-height: 1.1; }
+  .fm-close { background: transparent; border: 0; color: var(--text2); cursor: pointer; padding: 4px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all 0.15s; }
+  .fm-close:hover { background: var(--surface2); color: var(--text); }
+  .fm-body { padding: 24px; }
+
+  @keyframes fm-fade-in { from { opacity: 0 } to { opacity: 1 } }
+  @keyframes fm-scale-in { from { opacity: 0; transform: scale(0.95) translateY(8px) } to { opacity: 1; transform: scale(1) translateY(0) } }
+
+  @media (max-width: 640px) {
+    .fm-backdrop { padding: 0; backdrop-filter: none; }
+    .fm-content { max-height: 100vh; height: 100vh; border-radius: 0; max-width: 100% !important; border: 0; }
+    .fm-body { padding: 16px; }
+    .fm-header { padding: 16px; }
+  }
   .form-group { margin-bottom: 16px; }
   .form-label { font-size: 10px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; margin-bottom: 6px; display: block; font-family: var(--font-body); }
   .form-input, .form-select, .form-textarea { width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; color: var(--text); font-size: 14px; font-family: var(--font-body); outline: none; transition: border 0.2s; font-weight: 500; }
@@ -2762,16 +2796,25 @@ const styles = `
   .search-bar { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
   .search-bar input { background: none; border: none; color: var(--text); font-size: 14px; flex: 1; outline: none; font-family: var(--font-body); font-weight: 500; }
 
-  .owner-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; cursor: pointer; transition: all 0.2s; overflow: hidden; }
-  .owner-card:hover { border-color: var(--accent); }
-  .owner-header { padding: 16px; display: flex; align-items: center; gap: 14px; }
+  .owner-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; cursor: pointer; transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s; overflow: hidden; }
+  .owner-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.18); }
+  .owner-header { padding: 16px; display: flex; align-items: flex-start; gap: 14px; }
   .owner-avatar { width: 46px; height: 46px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-size: 18px; font-weight: 400; color: #000; flex-shrink: 0; letter-spacing: 0.05em; }
-  .owner-name { font-family: var(--font-display); font-size: 22px; font-weight: 400; letter-spacing: 0.06em; }
-  .owner-sub { font-size: 12px; color: var(--text2); margin-top: 2px; font-weight: 500; }
-  .owner-stats { display: flex; padding: 12px 16px; border-top: 1px solid var(--border); gap: 16px; }
-  .owner-stat { text-align: center; }
-  .owner-stat-val { font-family: var(--font-display); font-size: 26px; font-weight: 400; color: var(--accent); line-height: 1; }
-  .owner-stat-label { font-size: 9px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; margin-top: 2px; }
+  .owner-name { font-family: var(--font-display); font-size: 19px; font-weight: 600; letter-spacing: 0.03em; color: var(--text); line-height: 1.2; }
+  .owner-sub { font-size: 13px; color: var(--text2); margin-top: 3px; font-weight: 500; }
+
+  /* Kafelek z liczbą pozycji właściciela (klikalny → rozwija listę) */
+  .owner-count-tile { width: 52px; height: 52px; border-radius: 12px; flex-shrink: 0; padding: 0; border: 1px solid var(--border); background: var(--surface2); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; cursor: pointer; transition: all 0.15s; }
+  .owner-count-tile:hover { border-color: var(--accent); background: rgba(59,130,246,0.14); }
+  .owner-count-tile:active { transform: scale(0.95); }
+  .owner-count-num { font-family: var(--font-display); font-size: 22px; font-weight: 600; color: var(--accent); line-height: 1; }
+  .owner-count-label { font-size: 8px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text2); }
+  /* Rozwinięta lista pozycji właściciela */
+  .owner-apts-list { padding: 10px 16px 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+  .owner-apts-head { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text2); margin-bottom: 2px; }
+  .owner-apt-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 8px; background: var(--surface2); cursor: pointer; transition: background 0.15s; }
+  .owner-apt-item:hover { background: rgba(59,130,246,0.12); }
+  .owner-apt-name { font-size: 13px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   .kw-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 12px; }
   .kw-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
@@ -3247,6 +3290,60 @@ const FieldError = ({ msg }) => msg ? (
   <div className="field-error" role="alert">{msg}</div>
 ) : null;
 
+// ─── FLOATING MODAL (FIX 2.A) ──────────────────────────────────────────────────
+// Uniwersalny modal pływający na środku ekranu. Esc + klik w backdrop zamykają,
+// focus trafia na pierwsze pole. Na mobile (< 640px) renderuje się full-screen.
+const FM_SIZES = { sm: 400, md: 600, lg: 800, xl: 1000 };
+
+const FloatingModal = ({ open, onClose, title, children, size = "md" }) => {
+  const contentRef = useRef(null);
+
+  // Esc zamyka modal
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === "Escape") onClose && onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  // Focus na pierwsze pole formularza — tylko przy otwarciu (bez kradzieży focusu przy re-renderze)
+  useEffect(() => {
+    if (!open) return;
+    const raf = requestAnimationFrame(() => {
+      const el = contentRef.current;
+      if (!el) return;
+      const first = el.querySelector("input, select, textarea");
+      if (first) first.focus();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [open]);
+
+  if (!open) return null;
+  return (
+    <div className="fm-backdrop" onClick={onClose}>
+      <div className="fm-content" ref={contentRef} onClick={e => e.stopPropagation()}
+        style={{ "--fm-max-width": `${FM_SIZES[size] || FM_SIZES.md}px` }}>
+        <div className="fm-header">
+          <div className="fm-title">{title}</div>
+          <button className="fm-close" onClick={onClose} aria-label="Zamknij"><Icon name="x" size={18} /></button>
+        </div>
+        <div className="fm-body">{children}</div>
+      </div>
+    </div>
+  );
+};
+
+// Dialog potwierdzenia zbudowany na FloatingModal. variant "danger" = czerwony przycisk.
+const ConfirmModal = ({ open, onClose, onConfirm, title, message, variant = "default", confirmLabel = "Potwierdź", cancelLabel = "Anuluj" }) => (
+  <FloatingModal open={open} onClose={onClose} title={title} size="sm">
+    <p style={{ fontSize:14, color:"var(--text2)", lineHeight:1.6, marginBottom:20 }}>{message}</p>
+    <div className="btn-row" style={{ marginTop:0 }}>
+      <button className="btn btn-ghost" onClick={onClose}>{cancelLabel}</button>
+      <button className={`btn ${variant === "danger" ? "btn-danger" : "btn-primary"}`} onClick={onConfirm}>{confirmLabel}</button>
+    </div>
+  </FloatingModal>
+);
+
 const ApartmentForm = ({ apt, owners, onSave, onClose, onGoToSettings, defaultCategory }) => {
   const categoriesRef = useRef(Categories.getAll());
   const schemaFields = useRef(FormSchema.visible());
@@ -3320,9 +3417,7 @@ const ApartmentForm = ({ apt, owners, onSave, onClose, onGoToSettings, defaultCa
   });
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal slide-up" onClick={e => e.stopPropagation()} style={{ maxHeight:"92vh" }}>
-        <div className="modal-title">{apt ? "Edytuj pozycję" : "Nowa pozycja"}</div>
+    <FloatingModal open onClose={onClose} title={apt ? "Edytuj pozycję" : "Nowa pozycja"}>
 
         {/* Kategoria — zawsze na górze */}
         <div className="form-group">
@@ -3375,8 +3470,7 @@ const ApartmentForm = ({ apt, owners, onSave, onClose, onGoToSettings, defaultCa
           <button className="btn btn-ghost" onClick={onClose}>Anuluj</button>
           <button className="btn btn-primary" disabled={categories.length === 0 || !form.status} onClick={() => submit(onSave)}>Zapisz</button>
         </div>
-      </div>
-    </div>
+    </FloatingModal>
   );
 };
 
@@ -3387,9 +3481,7 @@ const TaskForm = ({ task, apartments, onSave, onClose }) => {
   }, "task");
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal slide-up" onClick={e => e.stopPropagation()}>
-        <div className="modal-title">{task ? "Edytuj zadanie" : "Nowe zadanie"}</div>
+    <FloatingModal open onClose={onClose} title={task ? "Edytuj zadanie" : "Nowe zadanie"}>
         <div className="form-group">
           <label className="form-label">Apartament / Lokalizacja <span style={{color:"var(--red)"}}>*</span></label>
           <select className={`form-select ${hasError("apartmentId") ? "input-error" : ""}`}
@@ -3446,8 +3538,7 @@ const TaskForm = ({ task, apartments, onSave, onClose }) => {
           <button className="btn btn-ghost" onClick={onClose}>Anuluj</button>
           <button className="btn btn-primary" onClick={() => submit(onSave)}>Zapisz</button>
         </div>
-      </div>
-    </div>
+    </FloatingModal>
   );
 };
 
@@ -3458,9 +3549,7 @@ const OwnerForm = ({ owner, onSave, onClose }) => {
   }, "owner");
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal slide-up" onClick={e => e.stopPropagation()}>
-        <div className="modal-title">{owner ? "Edytuj właściciela" : "Nowy właściciel"}</div>
+    <FloatingModal open onClose={onClose} title={owner ? "Edytuj właściciela" : "Nowy właściciel"}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <div className="form-group">
             <label className="form-label">Imię <span style={{color:"var(--red)"}}>*</span></label>
@@ -3519,8 +3608,7 @@ const OwnerForm = ({ owner, onSave, onClose }) => {
           <button className="btn btn-ghost" onClick={onClose}>Anuluj</button>
           <button className="btn btn-primary" onClick={() => submit(onSave)}>Zapisz</button>
         </div>
-      </div>
-    </div>
+    </FloatingModal>
   );
 };
 
@@ -3973,9 +4061,7 @@ const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
 
       {/* Formularz pożyczki */}
       {showForm && (
-        <div className="modal-overlay" onClick={() => { setShowForm(false); resetForm(); }}>
-          <div className="modal slide-up" onClick={e => e.stopPropagation()}>
-            <div className="modal-title">Nowa pożyczka</div>
+        <FloatingModal open onClose={() => { setShowForm(false); resetForm(); }} title="Nowa pożyczka">
 
             <div className="form-group">
               <label className="form-label">Z apartamentu (wypożyczamy z) *</label>
@@ -4071,33 +4157,24 @@ const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
               <button className="btn btn-ghost" onClick={() => { setShowForm(false); resetForm(); }}>Anuluj</button>
               <button className="btn btn-primary" onClick={submit}>Zapisz pożyczkę</button>
             </div>
-          </div>
-        </div>
+        </FloatingModal>
       )}
     </div>
   );
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// FILES VIEW — pliki i linki (szablony, instrukcje)
+// FILE FORM — współdzielony modal dodawania pliku (FIX 2.A + 2.C)
+// Używany w głównej zakładce Pliki oraz w detalu apartamentu. Gdy lockedAptId
+// jest ustawione, plik jest na sztywno powiązany z tym apartamentem (pole ukryte).
 // ═══════════════════════════════════════════════════════════════════════════
-const FilesView = ({ apartments, files, onUpdate, currentUser }) => {
-  const [showForm, setShowForm] = useState(false);
-  const [filterCat, setFilterCat] = useState("all");
-  const [filterApt, setFilterApt] = useState("all");
+const FileForm = ({ apartments, currentUser, onClose, onSaved, lockedAptId = null, lockedAptName = "", defaultCategory = "other" }) => {
   const [form, setForm] = useState({
-    name:"", url:"", category:"other", aptId:"", description:"",
+    name:"", url:"", category: defaultCategory || "other",
+    aptId: lockedAptId != null ? String(lockedAptId) : "",
+    description:"",
   });
   const [error, setError] = useState("");
-
-  const canManage = currentUser && currentUser.role === ROLES.MANAGER || currentUser && currentUser.role === ROLES.WORKER;
-
-  const visible = files.filter(f => {
-    if (filterCat !== "all" && f.category !== filterCat) return false;
-    if (filterApt === "none" && f.aptId) return false;
-    if (filterApt !== "all" && filterApt !== "none" && String(f.aptId) !== String(filterApt)) return false;
-    return true;
-  });
 
   const submit = () => {
     if (!form.name.trim()) { setError("Nazwa jest wymagana"); return; }
@@ -4108,21 +4185,96 @@ const FilesView = ({ apartments, files, onUpdate, currentUser }) => {
       setError("Nieprawidłowy URL (dodaj https://...)");
       return;
     }
-
     const entry = Files.add({
       name: form.name,
       url: form.url,
       category: form.category,
-      aptId: form.aptId || null,
+      aptId: lockedAptId != null ? lockedAptId : (form.aptId || null),
       description: form.description,
       addedBy: currentUser && currentUser.name || "",
     });
     if (!entry) { setError("Nie udało się zapisać"); return; }
-    onUpdate && onUpdate();
-    setShowForm(false);
-    setForm({ name:"", url:"", category:"other", aptId:"", description:"" });
-    setError("");
+    onSaved && onSaved();
   };
+
+  return (
+    <FloatingModal open onClose={onClose} title="Dodaj plik">
+      {lockedAptName && (
+        <div style={{ padding:"10px 12px", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10, fontSize:12, color:"var(--text2)", marginBottom:16 }}>
+          Plik będzie powiązany z: <strong style={{ color:"var(--text)" }}>{lockedAptName}</strong>
+        </div>
+      )}
+
+      <div className="form-group">
+        <label className="form-label">Nazwa pliku *</label>
+        <input className="form-input" value={form.name}
+          onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+          placeholder="np. Umowa najmu — szablon 2026" />
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">URL (Google Drive, Dropbox, inne) *</label>
+        <input className="form-input" value={form.url}
+          onChange={e => setForm(f => ({ ...f, url: e.target.value }))}
+          placeholder="https://drive.google.com/..." />
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">Kategoria</label>
+        <select className="form-select" value={form.category}
+          onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>
+          {FILE_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+        </select>
+      </div>
+
+      {lockedAptId == null && (
+        <div className="form-group">
+          <label className="form-label">Powiąż z apartamentem (opcjonalnie)</label>
+          <select className="form-select" value={form.aptId}
+            onChange={e => setForm(f => ({ ...f, aptId: e.target.value }))}>
+            <option value="">— bez powiązania (plik ogólny) —</option>
+            {apartments.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+        </div>
+      )}
+
+      <div className="form-group">
+        <label className="form-label">Opis</label>
+        <textarea className="form-textarea" value={form.description}
+          onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
+          placeholder="opcjonalnie..." />
+      </div>
+
+      {error && (
+        <div style={{ padding:"8px 10px", background:"rgba(239,68,68,0.12)", border:"1px solid rgba(239,68,68,0.3)", borderRadius:8, fontSize:12, color:"var(--red)", marginBottom:10, fontWeight:600 }}>
+          {error}
+        </div>
+      )}
+
+      <div className="btn-row">
+        <button className="btn btn-ghost" onClick={onClose}>Anuluj</button>
+        <button className="btn btn-primary" onClick={submit}>Zapisz</button>
+      </div>
+    </FloatingModal>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FILES VIEW — pliki i linki (szablony, instrukcje)
+// ═══════════════════════════════════════════════════════════════════════════
+const FilesView = ({ apartments, files, onUpdate, currentUser }) => {
+  const [showForm, setShowForm] = useState(false);
+  const [filterCat, setFilterCat] = useState("all");
+  const [filterApt, setFilterApt] = useState("all");
+
+  const canManage = currentUser && currentUser.role === ROLES.MANAGER || currentUser && currentUser.role === ROLES.WORKER;
+
+  const visible = files.filter(f => {
+    if (filterCat !== "all" && f.category !== filterCat) return false;
+    if (filterApt === "none" && f.aptId) return false;
+    if (filterApt !== "all" && filterApt !== "none" && String(f.aptId) !== String(filterApt)) return false;
+    return true;
+  });
 
   const handleDelete = (id) => {
     if (currentUser && currentUser.role !== ROLES.MANAGER) return;
@@ -4130,19 +4282,11 @@ const FilesView = ({ apartments, files, onUpdate, currentUser }) => {
     onUpdate && onUpdate();
   };
 
-  // FIX 1.5 — otwierając modal pre-fill kategorię aktywnym filtrem
-  // ("Wszystkie" → domyślna "other", którą user może zmienić)
-  const openAddForm = () => {
-    setForm(f => ({ ...f, category: filterCat !== "all" ? filterCat : "other" }));
-    setShowForm(true);
-  };
+  const openAddForm = () => setShowForm(true);
 
   const aptName = (id) => ((apartments.find(a => a.id === id) || {}).name) || "—";
-  const catLabel = (id) => ((FILE_CATEGORIES.find(c => c.id === id) || {}).label) || "Inne";
-  const catColor = {
-    contract:"var(--accent)", instruction:"var(--green)", invoice:"var(--yellow)",
-    photo:"#ec4899", other:"var(--text2)",
-  };
+  const catLabel = fileCatLabel;
+  const catColor = FILE_CAT_COLORS;
 
   return (
     <div>
@@ -4253,75 +4397,13 @@ const FilesView = ({ apartments, files, onUpdate, currentUser }) => {
 
       {/* Formularz dodawania pliku */}
       {showForm && (
-        <div className="modal-overlay" onClick={() => setShowForm(false)}>
-          <div className="modal slide-up" onClick={e => e.stopPropagation()}>
-            <div className="modal-title">Dodaj plik</div>
-
-            <div className="form-group">
-              <label className="form-label">Nazwa pliku *</label>
-              <input
-                className="form-input"
-                value={form.name}
-                onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                placeholder="np. Umowa najmu — szablon 2026"
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">URL (Google Drive, Dropbox, inne) *</label>
-              <input
-                className="form-input"
-                value={form.url}
-                onChange={e => setForm(f => ({ ...f, url: e.target.value }))}
-                placeholder="https://drive.google.com/..."
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Kategoria</label>
-              <select
-                className="form-select"
-                value={form.category}
-                onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
-              >
-                {FILE_CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
-              </select>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Powiąż z apartamentem (opcjonalnie)</label>
-              <select
-                className="form-select"
-                value={form.aptId}
-                onChange={e => setForm(f => ({ ...f, aptId: e.target.value }))}
-              >
-                <option value="">— bez powiązania (plik ogólny) —</option>
-                {apartments.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Opis</label>
-              <textarea
-                className="form-textarea"
-                value={form.description}
-                onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                placeholder="opcjonalnie..."
-              />
-            </div>
-
-            {error && (
-              <div style={{ padding:"8px 10px", background:"rgba(239,68,68,0.12)", border:"1px solid rgba(239,68,68,0.3)", borderRadius:8, fontSize:12, color:"var(--red)", marginBottom:10, fontWeight:600 }}>
-                {error}
-              </div>
-            )}
-
-            <div className="btn-row">
-              <button className="btn btn-ghost" onClick={() => setShowForm(false)}>Anuluj</button>
-              <button className="btn btn-primary" onClick={submit}>Zapisz</button>
-            </div>
-          </div>
-        </div>
+        <FileForm
+          apartments={apartments}
+          currentUser={currentUser}
+          defaultCategory={filterCat !== "all" ? filterCat : "other"}
+          onClose={() => setShowForm(false)}
+          onSaved={() => { onUpdate && onUpdate(); setShowForm(false); }}
+        />
       )}
     </div>
   );
@@ -4993,11 +5075,7 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
 
       {/* ═══ MODAL: Formularz kategorii ═══ */}
       {showCatForm && (
-        <div className="modal-overlay" onClick={() => setShowCatForm(false)}>
-          <div className="modal slide-up" onClick={e => e.stopPropagation()}>
-            <div className="modal-title">
-              {catForm.id ? "Edytuj kategorię" : "Nowa kategoria"}
-            </div>
+        <FloatingModal open onClose={() => setShowCatForm(false)} title={catForm.id ? "Edytuj kategorię" : "Nowa kategoria"}>
 
             <div className="form-group">
               <label className="form-label">Nazwa kategorii *</label>
@@ -5091,8 +5169,7 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
               <button className="btn btn-ghost" onClick={() => setShowCatForm(false)}>Anuluj</button>
               <button className="btn btn-primary" onClick={saveCategory} disabled={!catForm.name.trim()}>Zapisz</button>
             </div>
-          </div>
-        </div>
+        </FloatingModal>
       )}
     </div>
   );
@@ -5307,9 +5384,7 @@ const CleaningManagerView = ({ apartments, cleaningSessions, onAddSession, onUpd
 
       {/* Add session modal */}
       {showAddModal && (
-        <div className="modal-overlay" onClick={() => setShowAddModal(false)}>
-          <div className="modal slide-up" onClick={e => e.stopPropagation()}>
-            <div className="modal-title">Dodaj sprzątanie</div>
+        <FloatingModal open onClose={() => setShowAddModal(false)} title="Dodaj sprzątanie" size="sm">
             <div className="form-group">
               <label className="form-label">Apartament</label>
               <select className="form-select" value={addAptId} onChange={e => setAddAptId(e.target.value)}>
@@ -5330,16 +5405,18 @@ const CleaningManagerView = ({ apartments, cleaningSessions, onAddSession, onUpd
               }}>Dodaj</button>
               <button className="btn" style={{ flex:1 }} onClick={() => setShowAddModal(false)}>Anuluj</button>
             </div>
-          </div>
-        </div>
+        </FloatingModal>
       )}
     </div>
   );
 };
 
 // ─── APARTMENT DETAIL — rozszerzony z nowymi zakładkami ──────────────────────
-const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartments, onBack, onEdit, onAddTask, onSelectTask, onRefreshLoans, currentUser, initialTab }) => {
+const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartments, files, onBack, onEdit, onAddTask, onSelectTask, onRefreshLoans, onRefreshFiles, currentUser, initialTab }) => {
   const [tab, setTab] = useState(initialTab || "info");
+  const [showFileForm, setShowFileForm] = useState(false);
+  // Pliki przypisane do tego apartamentu (FIX 2.C)
+  const apartmentFiles = (files || []).filter(f => String(f.aptId) === String(apt.id));
   const [taskFilter, setTaskFilter] = useState("Wszystkie");
 
   // ── Uprawnienia ──────────────────────────────────────────────────────────
@@ -5592,6 +5669,7 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
     { id:"textiles",label:"TEKSTYLIA" },
     { id:"orders",  label:"ZAMÓWIENIA" },
     { id:"loans",   label:`POŻYCZKI (${aptLoans.filter(l=>l.status==="active").length})` },
+    { id:"pliki",   label:`PLIKI (${apartmentFiles.length})` },
     { id:"zadania", label:`ZADANIA (${tasks.filter(t=>t.apartmentId===apt.id).length})` },
     { id:"historia",label:`HISTORIA SPRZĄTANIA (${aptHistory.length})` },
   ];
@@ -6242,23 +6320,15 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
 
       {/* Modal potwierdzenia usunięcia pozycji przy qty=0 */}
       {confirmDelete && (
-        <div className="modal-overlay" onClick={() => setConfirmDelete(null)}>
-          <div className="modal" style={{ maxWidth:360 }} onClick={e => e.stopPropagation()}>
-            <div className="modal-title">Usunąć pozycję?</div>
-            <p style={{ fontSize:14, color:"var(--text2)", lineHeight:1.6, marginBottom:16 }}>
-              Ilość pozycji <strong style={{ color:"var(--text)" }}>{confirmDelete.item.name}</strong> ma zostać zmniejszona do 0.
-              <br /><br />Czy chcesz całkowicie usunąć tę pozycję z listy?
-            </p>
-            <div style={{ display:"flex", gap:10 }}>
-              <button className="btn" style={{ flex:1 }} onClick={() => setConfirmDelete(null)}>Anuluj</button>
-              <button
-                className="btn btn-primary"
-                style={{ flex:1, background:"var(--red)", color:"#fff" }}
-                onClick={confirmDeleteItem}
-              >Usuń pozycję</button>
-            </div>
-          </div>
-        </div>
+        <ConfirmModal
+          open
+          variant="danger"
+          title="Usunąć pozycję?"
+          message={<>Ilość pozycji <strong style={{ color:"var(--text)" }}>{confirmDelete.item.name}</strong> ma zostać zmniejszona do 0.<br /><br />Czy chcesz całkowicie usunąć tę pozycję z listy?</>}
+          confirmLabel="Usuń pozycję"
+          onClose={() => setConfirmDelete(null)}
+          onConfirm={confirmDeleteItem}
+        />
       )}
 
       {/* ── POŻYCZKI (z/do tego apartamentu) ── */}
@@ -6452,6 +6522,66 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
             );
           })}
         </div>
+      )}
+
+      {/* ── PLIKI (FIX 2.C) — pliki przypisane do tego apartamentu ── */}
+      {tab === "pliki" && (
+        <div className="detail-section">
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16, gap:12 }}>
+            <div className="detail-section-title" style={{ marginBottom:0 }}><Icon name="file" size={14} />Pliki apartamentu</div>
+            {canEdit && (
+              <button className="btn btn-primary" style={{ width:"auto", padding:"6px 14px", fontSize:11 }} onClick={() => setShowFileForm(true)}>+ Dodaj plik</button>
+            )}
+          </div>
+          {apartmentFiles.length === 0 ? (
+            <div className="empty" style={{ padding:"32px 20px" }}>
+              <div className="empty-icon"><Icon name="file" size={40} /></div>
+              <h3>Brak plików</h3>
+              <p style={{ color:"var(--text2)", fontSize:13, marginTop:4 }}>Brak plików dla tego apartamentu.</p>
+              {canEdit && <button className="btn btn-primary" style={{ marginTop:16, width:"auto", padding:"10px 18px" }} onClick={() => setShowFileForm(true)}>+ Dodaj plik</button>}
+            </div>
+          ) : (
+            FILE_CATEGORIES.filter(cat => apartmentFiles.some(f => (f.category || "other") === cat.id)).map(cat => {
+              const catFiles = apartmentFiles.filter(f => (f.category || "other") === cat.id);
+              const color = FILE_CAT_COLORS[cat.id] || "var(--text2)";
+              return (
+                <div key={cat.id} style={{ marginBottom:18 }}>
+                  <div style={{ fontSize:10, fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", color, marginBottom:8 }}>{cat.label} ({catFiles.length})</div>
+                  {catFiles.map(f => (
+                    <div key={f.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 12px", background:"var(--surface)", border:"1px solid var(--border)", borderLeft:`3px solid ${color}`, borderRadius:10, marginBottom:8 }}>
+                      <Icon name="file" size={16} color={color} />
+                      <a href={f.url} target="_blank" rel="noopener noreferrer" style={{ flex:1, minWidth:0, textDecoration:"none", color:"var(--text)" }}>
+                        <div style={{ fontSize:13, fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{f.name}</div>
+                        <div style={{ fontSize:11, color:"var(--text2)", marginTop:2 }}>
+                          {f.addedAt && `dodano ${f.addedAt.slice(0,10)}`}{f.addedBy && ` · ${f.addedBy}`}
+                        </div>
+                        {f.description && <div style={{ fontSize:11, color:"var(--text2)", marginTop:2, fontStyle:"italic" }}>{f.description}</div>}
+                      </a>
+                      <a href={f.url} target="_blank" rel="noopener noreferrer" title="Otwórz w nowej karcie" style={{ color:"var(--accent)", display:"inline-flex", flexShrink:0 }}><Icon name="link" size={16} color="var(--accent)" /></a>
+                      {currentUser && currentUser.role === ROLES.MANAGER && (
+                        <button onClick={() => { Files.remove(f.id); onRefreshFiles && onRefreshFiles(); }}
+                          style={{ background:"rgba(239,68,68,0.1)", border:"none", borderRadius:8, padding:"6px 8px", cursor:"pointer", color:"var(--red)", flexShrink:0 }} title="Usuń">
+                          <Icon name="trash" size={12} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {showFileForm && (
+        <FileForm
+          apartments={apartments}
+          currentUser={currentUser}
+          lockedAptId={apt.id}
+          lockedAptName={apt.name}
+          onClose={() => setShowFileForm(false)}
+          onSaved={() => { onRefreshFiles && onRefreshFiles(); setShowFileForm(false); }}
+        />
       )}
     </div>
   );
@@ -6691,7 +6821,7 @@ const TaskDetail = ({ task, apt, onBack, onEdit, onDelete, onComplete, onAccept,
   );
 };
 
-const OwnerDetail = ({ owner, apartments, onBack, onEdit, currentUser }) => {
+const OwnerDetail = ({ owner, apartments, onBack, onEdit, onSelectApt, renderAptIndicators, currentUser }) => {
   const ownerApts = apartments.filter(a => a.ownerId === owner.id);
   const isManager = currentUser && currentUser.role === ROLES.MANAGER;
   return (
@@ -6705,13 +6835,12 @@ const OwnerDetail = ({ owner, apartments, onBack, onEdit, currentUser }) => {
           </div>
         )}
       </div>
-      <div className="detail-hero">
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div className="owner-avatar" style={{ width: 56, height: 56, fontSize: 20 }}>{owner.lastName[0]}{owner.firstName[0]}</div>
-          <div>
-            <h2 style={{ fontFamily: "var(--font-display)", fontSize: 28, fontWeight: 400, letterSpacing: "0.06em" }}>{owner.lastName} {owner.firstName}</h2>
-            <div style={{ fontSize: 13, color: "var(--text2)", marginTop: 4 }}>{owner.email}</div>
-          </div>
+      <div className="detail-hero" style={{ textAlign: "center" }}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+          <div className="owner-avatar" style={{ width: 64, height: 64, fontSize: 22, marginBottom: 8 }}>{owner.lastName[0]}{owner.firstName[0]}</div>
+          <h2 style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 700, letterSpacing: "0.02em", color: "var(--text)", lineHeight: 1.1 }}>{owner.lastName} {owner.firstName}</h2>
+          <div style={{ fontSize: 14, color: "var(--text2)", fontWeight: 500 }}>{owner.phone || "—"}</div>
+          <div style={{ fontSize: 14, color: "var(--text2)", fontWeight: 500 }}>{owner.email || "—"}</div>
         </div>
       </div>
       <div className="action-row">
@@ -6741,10 +6870,23 @@ const OwnerDetail = ({ owner, apartments, onBack, onEdit, currentUser }) => {
       )}
       <div className="detail-section">
         <div className="detail-section-title">Apartamenty ({ownerApts.length})</div>
-        {ownerApts.map(a => (
-          <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
-            <span style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: 18, letterSpacing: "0.06em" }}>{a.name}</span>
-            <StatusBadge status={a.aptStatus} />
+        {ownerApts.length === 0 ? (
+          <div style={{ fontSize: 13, color: "var(--text2)" }}>Brak przypisanych apartamentów.</div>
+        ) : ownerApts.map(a => (
+          <div key={a.id} className="apt-row" onClick={() => onSelectApt && onSelectApt(a)}>
+            <div className="apt-row-left">
+              <div style={{ minWidth:0 }}>
+                <div style={{ display:"flex",alignItems:"center",gap:8,flexWrap:"wrap" }}>
+                  <div className="apt-row-name">{a.name}</div>
+                  {a.capacity > 0 && <span style={{ fontSize:10,color:"var(--text2)",fontWeight:600 }}>👥 {a.capacity} os.</span>}
+                </div>
+                {renderAptIndicators && renderAptIndicators(a)}
+              </div>
+            </div>
+            <div style={{ display:"flex",flexDirection:"column",alignItems:"center",gap:5,flexShrink:0 }}>
+              {a.aptStatus && <StatusBadge status={a.aptStatus} />}
+              {a.status && <span style={{ fontSize:9,fontWeight:700,color:APT_TYPE_COLORS[a.status]||"var(--text2)",letterSpacing:"0.06em",textTransform:"uppercase",textAlign:"center" }}>{a.status}</span>}
+            </div>
           </div>
         ))}
       </div>
@@ -6788,12 +6930,7 @@ const ToastNotification = ({ toast, toastColors }) => {
 const AuditPanelView = ({ entries, onClose, storageKB }) => {
   const ac = { LOGIN:"#10B981",LOGIN_DEMO:"#10B981",LOGOUT:"#94A3B8",INSERT:"#3B82F6",UPDATE:"#F59E0B",DELETE:"#EF4444",DELETE_TASK:"#EF4444",TASK_STATUS:"#A78BFA",ACCESS_DENIED:"#EF4444",QUEUE_FLUSH:"#3B82F6",TOKEN_REFRESH:"#F59E0B" };
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal slide-up" style={{ maxHeight:"82vh" }} onClick={e => e.stopPropagation()}>
-        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16 }}>
-          <div className="modal-title" style={{ marginBottom:0,fontSize:26 }}>Audit Log</div>
-          <button className="icon-btn" onClick={onClose}><Icon name="x" size={16} /></button>
-        </div>
+    <FloatingModal open onClose={onClose} title="Audit Log" size="md">
         <div style={{ fontSize:11,color:"var(--text2)",marginBottom:12,fontWeight:600 }}>
           {entries.length} wpisów · localStorage · Storage: {storageKB} KB
         </div>
@@ -6811,8 +6948,7 @@ const AuditPanelView = ({ entries, onClose, storageKB }) => {
               </div>
             </div>
           ))}
-      </div>
-    </div>
+    </FloatingModal>
   );
 };
 
@@ -6877,10 +7013,6 @@ export default function App() {
     const hasLoan = (loans || []).some(l => l.status === "active" && (l.fromAptId === apt.id || l.toAptId === apt.id));
     return (
       <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:6 }}>
-        {/* Status — kafelek nieklikalny, kolor wg statusu, pierwszy od lewej */}
-        <div className="apt-ind" title={`Status: ${apt.aptStatus || "—"}`}>
-          <Icon name={STATUS_ICONS[apt.aptStatus] || "home"} size={16} color={STATUS_COLORS[apt.aptStatus] || "#888"} />
-        </div>
         {/* Zadania — klik → zakładka Zadania apartamentu; przygaszone gdy brak */}
         <button type="button" className="apt-ind"
           title={hasTask ? (inProg ? "Zadanie w trakcie — otwórz zadania" : "Oczekujące zadanie — otwórz zadania") : "Zadania apartamentu"}
@@ -6907,6 +7039,7 @@ export default function App() {
   const openApt = (apt, initialTab = null) => { setAptInitialTab(initialTab); setSelectedApt(apt); };
   const [selectedTask, setSelectedTask] = useState(null);
   const [selectedOwner, setSelectedOwner] = useState(null);
+  const [expandedOwnerId, setExpandedOwnerId] = useState(null); // rozwinięta lista pozycji właściciela (klik w kafelek)
 
   const [showAptForm, setShowAptForm] = useState(false);
   const [showTaskForm, setShowTaskForm] = useState(false);
@@ -7066,9 +7199,17 @@ export default function App() {
     setShowOwnerForm(false); setEditingOwner(null);
   };
 
-  const deleteTask = async (id) => {
+  // FIX 2.A — window.confirm zastąpione przez ConfirmModal. deleteTask tylko prosi
+  // o potwierdzenie (ustawia id), faktyczne usunięcie robi performDeleteTask.
+  const [confirmDeleteTaskId, setConfirmDeleteTaskId] = useState(null);
+  const deleteTask = (id) => {
     if (!guard(currentUser, "delete:tasks", (m) => showToast(`🚫 ${m}`, "forbidden"))) return;
-    if (!window.confirm("Usunąć zadanie? Tego nie można cofnąć.")) return;
+    setConfirmDeleteTaskId(id);
+  };
+  const performDeleteTask = async () => {
+    const id = confirmDeleteTaskId;
+    if (id == null) return;
+    setConfirmDeleteTaskId(null);
     setTasks(prev => prev.filter(t => t.id !== id));
     if (!CONFIG.isDemo) {
       const r = await db.delete("tasks", `id=eq.${id}`);
@@ -7078,6 +7219,17 @@ export default function App() {
     showToast("Zadanie usunięte", "info");
     setSelectedTask(null);
   };
+  const taskDeleteConfirm = (
+    <ConfirmModal
+      open={confirmDeleteTaskId != null}
+      variant="danger"
+      title="Usunąć zadanie?"
+      message="Tego nie można cofnąć."
+      confirmLabel="Usuń zadanie"
+      onClose={() => setConfirmDeleteTaskId(null)}
+      onConfirm={performDeleteTask}
+    />
+  );
 
   const updateTaskStatus = async (taskId, newStatus) => {
     const task = tasks.find(t => t.id === taskId);
@@ -7234,7 +7386,7 @@ export default function App() {
             <TaskDetail task={selectedTask} apt={apt} currentUser={currentUser}
               onBack={() => setSelectedTask(null)}
               onEdit={() => { setEditingTask(selectedTask); setShowTaskForm(true); }}
-              onDelete={() => { deleteTask(selectedTask.id); setSelectedTask(null); }}
+              onDelete={() => deleteTask(selectedTask.id)}
               onComplete={(id, protocol) => {
                 const updates = {
                   status: "Zrobione",
@@ -7255,6 +7407,7 @@ export default function App() {
                 setSelectedTask(prev => prev && prev.id === id ? { ...prev, ...updates } : prev);
               }}
             />
+            {taskDeleteConfirm}
             {showTaskForm && <TaskForm task={editingTask} apartments={apartments} onSave={saveTask} onClose={() => { setShowTaskForm(false); setEditingTask(null); }} />}
           </div>
         </div>
@@ -7376,6 +7529,7 @@ export default function App() {
               setSelectedTask(prev => prev && prev.id === id ? { ...prev, ...updates } : prev);
             }}
           />
+          {taskDeleteConfirm}
           {showTaskForm && <TaskForm task={editingTask} apartments={apartments} onSave={saveTask} onClose={() => { setShowTaskForm(false); setEditingTask(null); }} />}
         </Shell>
       </div>
@@ -7388,12 +7542,13 @@ export default function App() {
       <div className="app-root">
         <SidebarNav />
         <Shell {...sp}>
-          <ApartmentDetail apt={selectedApt} owner={owner} tasks={tasks} cleaningSessions={cleaningSessions} loans={loans} apartments={apartments} currentUser={currentUser} initialTab={aptInitialTab}
+          <ApartmentDetail apt={selectedApt} owner={owner} tasks={tasks} cleaningSessions={cleaningSessions} loans={loans} apartments={apartments} files={files} currentUser={currentUser} initialTab={aptInitialTab}
             onBack={() => { setSelectedApt(null); setAptInitialTab(null); }}
             onEdit={() => { setEditingApt(selectedApt); setShowAptForm(true); }}
             onAddTask={() => { setPrefillApt(selectedApt.id); setShowTaskForm(true); }}
             onSelectTask={(task) => setSelectedTask(task)}
             onRefreshLoans={refreshLoans}
+            onRefreshFiles={refreshFiles}
           />
           {showAptForm && <ApartmentForm apt={editingApt} owners={owners} defaultCategory={defaultCategory} onSave={f => { saveApt(f); setSelectedApt(a => ({ ...a, ...f })); }} onClose={() => { setShowAptForm(false); setEditingApt(null); }} onGoToSettings={() => { setShowAptForm(false); setTab("settings"); }} />}
           {showTaskForm && <TaskForm task={editingTask || (prefillApt ? { apartmentId: prefillApt } : null)} apartments={apartments} onSave={saveTask} onClose={() => { setShowTaskForm(false); setEditingTask(null); setPrefillApt(null); }} />}
@@ -7410,6 +7565,8 @@ export default function App() {
           <OwnerDetail owner={selectedOwner} apartments={apartments} currentUser={currentUser}
             onBack={() => setSelectedOwner(null)}
             onEdit={() => { setEditingOwner(selectedOwner); setShowOwnerForm(true); }}
+            onSelectApt={(apt) => openApt(apt)}
+            renderAptIndicators={renderAptIndicators}
           />
           {showOwnerForm && <OwnerForm owner={editingOwner} onSave={o => { saveOwner(o); setSelectedOwner(prev => ({ ...prev, ...o })); }} onClose={() => { setShowOwnerForm(false); setEditingOwner(null); }} />}
         </Shell>
@@ -7558,16 +7715,16 @@ export default function App() {
                     <div key={apt.id} className="apt-row" onClick={() => openApt(apt)}>
                       <div className="apt-row-left">
                         <div style={{ minWidth:0 }}>
-                          <div className="apt-row-name">{apt.name}</div>
-                          <div style={{ display:"flex",gap:8,marginTop:3,flexWrap:"wrap" }}>
+                          <div style={{ display:"flex",alignItems:"center",gap:8,flexWrap:"wrap" }}>
+                            <div className="apt-row-name">{apt.name}</div>
                             {apt.capacity > 0 && <span style={{ fontSize:10,color:"var(--text2)",fontWeight:600 }}>👥 {apt.capacity} os.</span>}
                           </div>
                           {renderAptIndicators(apt)}
                         </div>
                       </div>
-                      <div style={{ display:"flex",flexDirection:"column",alignItems:"flex-end",gap:3,flexShrink:0 }}>
-                        <span style={{ fontSize:10,fontWeight:700,color:STATUS_COLORS[apt.aptStatus]||"#888",letterSpacing:"0.06em",textTransform:"uppercase" }}>{apt.aptStatus}</span>
-                        {apt.status && <span style={{ fontSize:9,fontWeight:700,color:APT_TYPE_COLORS[apt.status]||"var(--text2)",letterSpacing:"0.06em",textTransform:"uppercase" }}>{apt.status}</span>}
+                      <div style={{ display:"flex",flexDirection:"column",alignItems:"center",gap:5,flexShrink:0 }}>
+                        {apt.aptStatus && <StatusBadge status={apt.aptStatus} />}
+                        {apt.status && <span style={{ fontSize:9,fontWeight:700,color:APT_TYPE_COLORS[apt.status]||"var(--text2)",letterSpacing:"0.06em",textTransform:"uppercase",textAlign:"center" }}>{apt.status}</span>}
                       </div>
                     </div>
                   );
@@ -7679,15 +7836,15 @@ export default function App() {
                       <div key={apt.id} className="apt-row" onClick={() => openApt(apt)}>
                         <div className="apt-row-left">
                           <div style={{ minWidth:0 }}>
-                            <div className="apt-row-name">{apt.name}</div>
-                            <div style={{ display:"flex",gap:8,marginTop:3,flexWrap:"wrap" }}>
+                            <div style={{ display:"flex",alignItems:"center",gap:8,flexWrap:"wrap" }}>
+                              <div className="apt-row-name">{apt.name}</div>
                               {apt.capacity > 0 && <span style={{ fontSize:10,color:"var(--text2)",fontWeight:600 }}>👥 {apt.capacity} os.</span>}
                             </div>
                             {renderAptIndicators(apt)}
                           </div>
                         </div>
-                        <div style={{ display:"flex",flexDirection:"column",alignItems:"flex-end",gap:3,flexShrink:0 }}>
-                          <span style={{ fontSize:10,fontWeight:700,color:STATUS_COLORS[apt.aptStatus]||"#888",letterSpacing:"0.06em",textTransform:"uppercase" }}>{apt.aptStatus}</span>
+                        <div style={{ display:"flex",flexDirection:"column",alignItems:"center",gap:5,flexShrink:0 }}>
+                          {apt.aptStatus && <StatusBadge status={apt.aptStatus} />}
                         </div>
                       </div>
                     );
@@ -7763,22 +7920,40 @@ export default function App() {
           <div className="content">
             {owners.map(owner => {
               const ownerApts = apartments.filter(a => a.ownerId === owner.id);
+              const expanded = expandedOwnerId === owner.id;
               return (
                 <div key={owner.id} className="owner-card" onClick={() => setSelectedOwner(owner)}>
                   <div className="owner-header">
-                    <div className="owner-avatar">{owner.lastName[0]}{owner.firstName[0]}</div>
-                    <div>
+                    <button type="button" className="owner-count-tile"
+                      title={expanded ? "Ukryj pozycje" : "Pokaż przypisane pozycje"}
+                      onClick={(e) => { e.stopPropagation(); setExpandedOwnerId(expanded ? null : owner.id); }}>
+                      <span className="owner-count-num">{ownerApts.length}</span>
+                      <span className="owner-count-label">poz.</span>
+                    </button>
+                    <div style={{ flex:1, minWidth:0 }}>
                       <div className="owner-name">{owner.lastName} {owner.firstName}</div>
-                      <div className="owner-sub">{owner.phone || owner.email || "—"}</div>
-                      {owner.status && <div style={{ marginTop:3 }}><span style={{ fontSize:9,fontWeight:700,letterSpacing:"0.1em",color:APT_TYPE_COLORS[owner.status]||"var(--text2)",textTransform:"uppercase" }}>{owner.status}</span></div>}
+                      {owner.phone && <div className="owner-sub">{owner.phone}</div>}
+                      {owner.email && <div className="owner-sub" style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{owner.email}</div>}
+                      {!owner.phone && !owner.email && <div className="owner-sub">—</div>}
                     </div>
-                    {owner.percent > 0 && <span style={{ marginLeft:"auto",fontFamily:"var(--font-display)",fontWeight:400,fontSize:26,color:"var(--accent)",letterSpacing:"0.04em" }}>{owner.percent}%</span>}
+                    <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:6, flexShrink:0 }}>
+                      {owner.status && <span style={{ fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:APT_TYPE_COLORS[owner.status]||"var(--text2)",textTransform:"uppercase",padding:"3px 8px",borderRadius:6,background:`${APT_TYPE_COLORS[owner.status]||"#888"}1a` }}>{owner.status}</span>}
+                      {owner.percent > 0 && <span style={{ fontFamily:"var(--font-display)",fontWeight:600,fontSize:22,color:"var(--accent)",letterSpacing:"0.02em",lineHeight:1 }}>{owner.percent}%</span>}
+                    </div>
                   </div>
-                  <div className="owner-stats">
-                    <div className="owner-stat"><div className="owner-stat-val">{ownerApts.length}</div><div className="owner-stat-label">Apartamentów</div></div>
-                    <div className="owner-stat"><div className="owner-stat-val" style={{ color:"var(--red)" }}>{ownerApts.filter(a => a.aptStatus==="Zajęty").length}</div><div className="owner-stat-label">Zajętych</div></div>
-                    <div className="owner-stat"><div className="owner-stat-val" style={{ color:"var(--green)" }}>{ownerApts.filter(a => a.aptStatus==="Wolny").length}</div><div className="owner-stat-label">Wolnych</div></div>
-                  </div>
+                  {expanded && (
+                    <div className="owner-apts-list" onClick={(e) => e.stopPropagation()}>
+                      <div className="owner-apts-head">{ownerApts.length} {plForm(ownerApts.length, "pozycja", "pozycje", "pozycji")}</div>
+                      {ownerApts.length === 0 ? (
+                        <div style={{ fontSize:13, color:"var(--text2)" }}>Brak przypisanych pozycji.</div>
+                      ) : ownerApts.map(a => (
+                        <div key={a.id} className="owner-apt-item" onClick={() => openApt(a)}>
+                          <span className="owner-apt-name">{a.name}</span>
+                          {a.aptStatus && <StatusBadge status={a.aptStatus} />}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}

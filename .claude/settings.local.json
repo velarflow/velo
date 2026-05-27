@@ -3,7 +3,17 @@
     "allow": [
       "PowerShell(claude config *)",
       "Bash(npx eslint *)",
-      "Bash(grep -oE \"[a-z-]+/[a-z-]+$|Error:\")"
+      "Bash(grep -oE \"[a-z-]+/[a-z-]+$|Error:\")",
+      "Bash(grep -n \"// §\\\\|const MOCK\\\\|^const [A-Z]\\\\|^function [A-Z]\\\\|=> {$\\\\|^  const [A-Z][a-zA-Z]* = \" src/App.jsx)",
+      "Bash(awk 'NR>=5540 && NR<=6460 && \\(/tab ===|setTab|className=\"tabs\"|className=\"tab |const TABS|tabs =|tab\\\\\\)|🧺|📋|🛠|\"info\"|\"zadania\"|Icon name=/\\)' src/App.jsx)",
+      "Bash(grep *)",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\);r[0].messages.filter\\(m=>m.ruleId==='no-unused-vars'\\).forEach\\(m=>console.log\\(m.line+': '+m.message\\)\\);}\\)\")",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\);const by={};r[0].messages.forEach\\(m=>by[m.ruleId]=\\(by[m.ruleId]||0\\)+1\\);console.log\\('TOTAL',r[0].messages.length\\);console.log\\(by\\);}\\)\")",
+      "Bash(npx vite *)",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\);const fatal=r[0].messages.filter\\(m=>m.fatal\\);console.log\\('fatalCount=',fatal.length\\);fatal.forEach\\(m=>console.log\\(m.line,m.message\\)\\);}\\)\")",
+      "Bash(awk 'NR>=4251 && NR<=4360' src/App.jsx)",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\);const nu=r[0].messages.filter\\(m=>m.ruleId==='no-unused-vars'&&/FloatingModal|ConfirmModal|FileForm/.test\\(m.message\\)\\);nu.forEach\\(m=>console.log\\('  line',m.line+':',m.message\\)\\);}\\)\")",
+      "Bash(node -e \"let d='';process.stdin.on\\('data',c=>d+=c\\).on\\('end',\\(\\)=>{const r=JSON.parse\\(d\\);r[0].messages.filter\\(m=>m.ruleId==='no-unused-vars'&&/tasks|activeCount|OwnerDetail/.test\\(m.message\\)\\).forEach\\(m=>console.log\\(m.line+': '+m.message\\)\\);}\\)\")"
     ]
   }
 }
