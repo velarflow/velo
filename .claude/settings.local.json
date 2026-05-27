@@ -24,7 +24,9 @@
       "Bash(node -e \"const p=require\\('./node_modules/vite/package.json'\\); console.log\\('vite deps:', JSON.stringify\\(p.dependencies, null, 0\\)\\); console.log\\('optionalDeps:', JSON.stringify\\(p.optionalDependencies||{}\\)\\)\")",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5179/)",
       "Bash(node test_smoke.mjs)",
-      "PowerShell(Get-NetTCPConnection *)"
+      "PowerShell(Get-NetTCPConnection *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }

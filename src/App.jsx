@@ -1743,61 +1743,71 @@ const DEFAULT_FORM_FIELDS = [
   { id:"notes", label:"Notatki ogólne", group:"Inne", type:"textarea", defaultVisible:true, order:102 },
 ];
 
+// Wbudowane pola formularza właściciela (PAKIET 5) — id 1:1 z polami obiektu owner
+const DEFAULT_OWNER_FIELDS = [
+  { id:"firstName",     label:"Imię",               group:"Dane podstawowe",      type:"text",     required:true,  defaultVisible:true, order:1 },
+  { id:"lastName",      label:"Nazwisko",           group:"Dane podstawowe",      type:"text",     required:true,  defaultVisible:true, order:2 },
+  { id:"phone",         label:"Telefon",            group:"Kontakt",              type:"phone",    defaultVisible:true, order:10 },
+  { id:"email",         label:"E-mail",             group:"Kontakt",              type:"email",    defaultVisible:true, order:11 },
+  { id:"kwLogin",       label:"Login KW",           group:"KW Hotel",             type:"text",     defaultVisible:true, order:20 },
+  { id:"kwPassword",    label:"Hasło KW",           group:"KW Hotel",             type:"text",     defaultVisible:true, order:21 },
+  { id:"status",        label:"Typ umowy",          group:"Umowa i rozliczenia",  type:"select",   required:true,  defaultVisible:true, order:30, options:["ZARZĄDZANIE","OBSŁUGA"], defaultValue:"ZARZĄDZANIE" },
+  { id:"percent",       label:"Prowizja (%)",       group:"Umowa i rozliczenia",  type:"number",   defaultVisible:true, order:31 },
+  { id:"billingMethod", label:"Metoda rozliczenia", group:"Umowa i rozliczenia",  type:"text",     defaultVisible:true, order:32 },
+  { id:"invoiceData",   label:"Dane do faktury",    group:"Umowa i rozliczenia",  type:"textarea", defaultVisible:true, order:33 },
+];
+
+// Domyślne pola per kategoria + lista kategorii konfigurowalnych formularzy
+const FORM_DEFAULTS = { apartment: DEFAULT_FORM_FIELDS, owner: DEFAULT_OWNER_FIELDS };
+const FORM_CATEGORIES = [
+  { key: "apartment", label: "Apartament" },
+  { key: "owner",     label: "Właściciel" },
+];
+
 const FormSchema = {
   _key: "form_schema",  // MUST-4: bez prefiksu
 
-  getAll() {
-    const stored = Storage.get(this._key);
-    if (stored && Array.isArray(stored) && stored.length > 0) return stored;
-    const seed = DEFAULT_FORM_FIELDS.map(f => ({ ...f, visible: f.defaultVisible }));
-    this.save(seed);
-    return seed;
+  // Cały magazyn { apartment:[...], owner:[...] }. Migruje stary format (płaska tablica = apartament)
+  // oraz dosiewa braki domyślnymi polami danej kategorii.
+  _store() {
+    const raw = Storage.get(this._key);
+    let store;
+    if (Array.isArray(raw)) store = { apartment: raw };          // migracja ze starego formatu
+    else if (raw && typeof raw === "object") store = { ...raw };
+    else store = {};
+    let changed = Array.isArray(raw);
+    Object.keys(FORM_DEFAULTS).forEach(cat => {
+      if (!Array.isArray(store[cat]) || store[cat].length === 0) {
+        store[cat] = FORM_DEFAULTS[cat].map(f => ({ ...f, visible: f.defaultVisible }));
+        changed = true;
+      }
+    });
+    if (changed) Storage.set(this._key, store);
+    return store;
   },
 
-  save(fields) { Storage.set(this._key, fields); },
+  getAll(cat = "apartment") { return this._store()[cat] || []; },
+
+  saveCat(cat, fields) {
+    const store = this._store();
+    store[cat] = fields;
+    Storage.set(this._key, store);
+  },
 
   // Widoczne pola posortowane po order
-  visible() { return this.getAll().filter(f => f.visible).sort((a, b) => a.order - b.order); },
+  visible(cat = "apartment") { return this.getAll(cat).filter(f => f.visible).sort((a, b) => a.order - b.order); },
 
   // Wszystkie pola posortowane po order
-  sorted() { return this.getAll().sort((a, b) => a.order - b.order); },
-
-  // Grupy z polami
-  groups(onlyVisible = false) {
-    const fields = onlyVisible ? this.visible() : this.sorted();
-    const groups = {};
-    fields.forEach(f => {
-      if (!groups[f.group]) groups[f.group] = [];
-      groups[f.group].push(f);
-    });
-    return groups;
-  },
+  sorted(cat = "apartment") { return this.getAll(cat).sort((a, b) => a.order - b.order); },
 
   // Toggle visibility
-  setVisible(id, visible) {
-    this.save(this.getAll().map(f => f.id === id ? { ...f, visible } : f));
-  },
-
-  // Move field up/down
-  moveField(id, direction) {
-    const fields = this.sorted();
-    const idx = fields.findIndex(f => f.id === id);
-    if (idx === -1) return;
-    const swapIdx = direction === "up" ? idx - 1 : idx + 1;
-    if (swapIdx < 0 || swapIdx >= fields.length) return;
-    // Swap orders
-    const orderA = fields[idx].order;
-    const orderB = fields[swapIdx].order;
-    this.save(this.getAll().map(f => {
-      if (f.id === fields[idx].id) return { ...f, order: orderB };
-      if (f.id === fields[swapIdx].id) return { ...f, order: orderA };
-      return f;
-    }));
+  setVisible(id, visible, cat = "apartment") {
+    this.saveCat(cat, this.getAll(cat).map(f => f.id === id ? { ...f, visible } : f));
   },
 
   // Add custom field (rozszerzone: required, options, placeholder, defaultValue, własne id)
-  addField(field) {
-    const all = this.getAll();
+  addField(field, cat = "apartment") {
+    const all = this.getAll(cat);
     const label = (field.label || "").trim();
     if (!label) return null;
     const maxOrder = Math.max(0, ...all.map(f => f.order));
@@ -1827,14 +1837,14 @@ const FormSchema = {
     if (entry.type === "select") entry.options = Array.isArray(field.options) ? field.options.filter(o => String(o).trim()) : [];
     if (field.placeholder) entry.placeholder = field.placeholder;
     if (field.defaultValue !== undefined && field.defaultValue !== "") entry.defaultValue = field.defaultValue;
-    this.save([...all, entry]);
+    this.saveCat(cat, [...all, entry]);
     return entry;
   },
 
-  // Aktualizacja właściwości pola (label, required, visible, group, placeholder, defaultValue, options;
-  // type/options zmienne tylko dla pól własnych — builtin ma typ związany z apt.<id>)
-  updateField(id, changes) {
-    this.save(this.getAll().map(f => {
+  // Aktualizacja właściwości pola (label, required, visible, group, placeholder, defaultValue, options, order;
+  // type/options zmienne tylko dla pól własnych — builtin ma typ związany z obiektem)
+  updateField(id, changes, cat = "apartment") {
+    this.saveCat(cat, this.getAll(cat).map(f => {
       if (f.id !== id) return f;
       const next = { ...f, ...changes, id: f.id };
       if (!f.custom) next.type = f.type; // builtin: typ niezmienny
@@ -1844,14 +1854,14 @@ const FormSchema = {
     }));
   },
 
-  removeField(id) {
-    this.save(this.getAll().filter(f => f.id !== id || !f.custom));
+  removeField(id, cat = "apartment") {
+    this.saveCat(cat, this.getAll(cat).filter(f => f.id !== id || !f.custom));
   },
 
-  // Reset całej schemy do domyślnej (usuwa pola własne, cofa zmiany)
-  resetAll() {
-    const seed = DEFAULT_FORM_FIELDS.map(f => ({ ...f, visible: f.defaultVisible }));
-    this.save(seed);
+  // Reset schemy danej kategorii do domyślnej (usuwa pola własne, cofa zmiany)
+  resetAll(cat = "apartment") {
+    const seed = (FORM_DEFAULTS[cat] || []).map(f => ({ ...f, visible: f.defaultVisible }));
+    this.saveCat(cat, seed);
     return seed;
   },
 };
@@ -3530,6 +3540,78 @@ const FieldDetailModal = ({ field, groupNames, onSave, onClose }) => {
   );
 };
 
+// Wspólny renderer pojedynczego pola ze schemy (apartament i właściciel). Klucz nadaje rodzic.
+const SchemaField = ({ field, form, set, touch, hasError }) => {
+  const labelEl = <label className="form-label">{field.label}{field.required && <span style={{color:"var(--red)",marginLeft:3}}>*</span>}</label>;
+  if (field.type === "textarea") {
+    return (
+      <div className="form-group">
+        {labelEl}
+        <textarea className="form-textarea" value={form[field.id] || ""} onChange={e => set(field.id, e.target.value)}
+          placeholder={field.placeholder || ""} style={{ minHeight:60 }} />
+      </div>
+    );
+  }
+  if (field.type === "checkbox") {
+    return (
+      <div className="form-group">
+        <label style={{ display:"flex", alignItems:"center", gap:10, cursor:"pointer" }}>
+          <input type="checkbox" checked={!!form[field.id]} onChange={e => set(field.id, e.target.checked)} style={{ width:18, height:18 }} />
+          <span style={{ fontSize:13, fontWeight:600 }}>{field.label}{field.required && <span style={{color:"var(--red)",marginLeft:3}}>*</span>}</span>
+        </label>
+      </div>
+    );
+  }
+  if (field.type === "select") {
+    return (
+      <div className="form-group">
+        {labelEl}
+        <select className="form-select" value={form[field.id] || ""} onChange={e => set(field.id, e.target.value)}>
+          <option value="">— wybierz —</option>
+          {(field.options || []).map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      </div>
+    );
+  }
+  if (field.type === "url") {
+    return (
+      <div className="form-group">
+        {labelEl}
+        <input className="form-input" type="url" value={form[field.id] || ""} onChange={e => set(field.id, e.target.value)} placeholder={field.placeholder || "https://..."} />
+      </div>
+    );
+  }
+  if (field.type === "date" || field.type === "datetime") {
+    return (
+      <div className="form-group">
+        {labelEl}
+        <input className="form-input" type={field.type === "datetime" ? "datetime-local" : "date"} value={form[field.id] || ""} onChange={e => set(field.id, e.target.value)} />
+      </div>
+    );
+  }
+  if (field.type === "number") {
+    return (
+      <div className="form-group">
+        {labelEl}
+        <NumberInput className={`form-input ${hasError(field.id) ? "input-error" : ""}`}
+          value={form[field.id] || ""} onChange={v => set(field.id, v)} onBlur={() => touch(field.id)} min={0} />
+        <FieldError msg={hasError(field.id)} />
+      </div>
+    );
+  }
+  // text, email, phone (tel) i fallback
+  const htmlType = field.type === "phone" ? "tel" : field.type === "email" ? "email" : "text";
+  return (
+    <div className="form-group">
+      {labelEl}
+      <input className={`form-input ${hasError(field.id) ? "input-error" : ""}`}
+        type={htmlType} value={form[field.id] || ""} onChange={e => set(field.id, e.target.value)} onBlur={() => touch(field.id)}
+        placeholder={field.placeholder || ""} />
+      <FieldError msg={hasError(field.id)} />
+    </div>
+  );
+};
+
 const ApartmentForm = ({ apt, owners, onSave, onClose, onGoToSettings, defaultCategory }) => {
   const categoriesRef = useRef(Categories.getAll());
   const schemaFields = useRef(FormSchema.visible());
@@ -3550,77 +3632,7 @@ const ApartmentForm = ({ apt, owners, onSave, onClose, onGoToSettings, defaultCa
   const allFields = useRef(FormSchema.sorted());
   const hiddenFields = allFields.current.filter(f => !f.visible);
 
-  // Dynamic field renderer
-  const renderSchemaField = (field) => {
-    const labelEl = <label className="form-label">{field.label}{field.required && <span style={{color:"var(--red)",marginLeft:3}}>*</span>}</label>;
-    if (field.type === "textarea") {
-      return (
-        <div className="form-group" key={field.id}>
-          {labelEl}
-          <textarea className="form-textarea" value={form[field.id] || ""} onChange={e => set(field.id, e.target.value)}
-            placeholder={field.placeholder || ""} style={{ minHeight:60 }} />
-        </div>
-      );
-    }
-    if (field.type === "checkbox") {
-      return (
-        <div className="form-group" key={field.id}>
-          <label style={{ display:"flex", alignItems:"center", gap:10, cursor:"pointer" }}>
-            <input type="checkbox" checked={!!form[field.id]} onChange={e => set(field.id, e.target.checked)} style={{ width:18, height:18 }} />
-            <span style={{ fontSize:13, fontWeight:600 }}>{field.label}{field.required && <span style={{color:"var(--red)",marginLeft:3}}>*</span>}</span>
-          </label>
-        </div>
-      );
-    }
-    if (field.type === "select") {
-      return (
-        <div className="form-group" key={field.id}>
-          {labelEl}
-          <select className="form-select" value={form[field.id] || ""} onChange={e => set(field.id, e.target.value)}>
-            <option value="">— wybierz —</option>
-            {(field.options || []).map(o => <option key={o} value={o}>{o}</option>)}
-          </select>
-        </div>
-      );
-    }
-    if (field.type === "url") {
-      return (
-        <div className="form-group" key={field.id}>
-          {labelEl}
-          <input className="form-input" type="url" value={form[field.id] || ""} onChange={e => set(field.id, e.target.value)} placeholder={field.placeholder || "https://..."} />
-        </div>
-      );
-    }
-    if (field.type === "date" || field.type === "datetime") {
-      return (
-        <div className="form-group" key={field.id}>
-          {labelEl}
-          <input className="form-input" type={field.type === "datetime" ? "datetime-local" : "date"} value={form[field.id] || ""} onChange={e => set(field.id, e.target.value)} />
-        </div>
-      );
-    }
-    if (field.type === "number") {
-      return (
-        <div className="form-group" key={field.id}>
-          {labelEl}
-          <NumberInput className={`form-input ${hasError(field.id) ? "input-error" : ""}`}
-            value={form[field.id] || ""} onChange={v => set(field.id, v)} onBlur={() => touch(field.id)} min={0} />
-          <FieldError msg={hasError(field.id)} />
-        </div>
-      );
-    }
-    // text, email, phone (tel) i fallback
-    const htmlType = field.type === "phone" ? "tel" : field.type === "email" ? "email" : "text";
-    return (
-      <div className="form-group" key={field.id}>
-        {labelEl}
-        <input className={`form-input ${hasError(field.id) ? "input-error" : ""}`}
-          type={htmlType} value={form[field.id] || ""} onChange={e => set(field.id, e.target.value)} onBlur={() => touch(field.id)}
-          placeholder={field.placeholder || ""} />
-        <FieldError msg={hasError(field.id)} />
-      </div>
-    );
-  };
+  const renderSchemaField = (field) => <SchemaField key={field.id} field={field} form={form} set={set} touch={touch} hasError={hasError} />;
 
   // Group visible fields
   const groups = {};
@@ -3756,67 +3768,46 @@ const TaskForm = ({ task, apartments, onSave, onClose }) => {
 };
 
 const OwnerForm = ({ owner, onSave, onClose }) => {
-  const { form, set, touch, submit, hasError } = useValidatedForm(owner || {
-    firstName: "", lastName: "", phone: "", email: "", kwLogin: "", kwPassword: "",
-    percent: 0, billingMethod: "", invoiceData: "", status: "ZARZĄDZANIE"
-  }, "owner");
+  const schemaFields = useRef(FormSchema.visible("owner"));
+  const allFields = useRef(FormSchema.sorted("owner"));
+
+  // Wartości początkowe ze schemy (wszystkie pola, z domyślnymi)
+  const initValues = {};
+  allFields.current.forEach(f => {
+    initValues[f.id] = f.defaultValue !== undefined ? f.defaultValue : (f.type === "checkbox" ? false : "");
+  });
+
+  const { form, set, touch, submit, hasError } = useValidatedForm(owner || initValues, "owner");
+  const [showOptional, setShowOptional] = useState(false);
+  const hiddenFields = allFields.current.filter(f => !f.visible);
+
+  // Grupowanie widocznych pól
+  const groups = {};
+  schemaFields.current.forEach(f => { if (!groups[f.group]) groups[f.group] = []; groups[f.group].push(f); });
 
   return (
     <FloatingModal open onClose={onClose} title={owner ? "Edytuj właściciela" : "Nowy właściciel"}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div className="form-group">
-            <label className="form-label">Imię <span style={{color:"var(--red)"}}>*</span></label>
-            <input className={`form-input ${hasError("firstName") ? "input-error" : ""}`}
-              value={form.firstName} onChange={e => set("firstName", e.target.value)} onBlur={() => touch("firstName")} />
-            <FieldError msg={hasError("firstName")} />
+        {Object.entries(groups).map(([groupName, fields]) => (
+          <div key={groupName} style={{ marginBottom:8 }}>
+            <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6, marginTop:8 }}>{groupName}</div>
+            {fields.map(f => <SchemaField key={f.id} field={f} form={form} set={set} touch={touch} hasError={hasError} />)}
           </div>
-          <div className="form-group">
-            <label className="form-label">Nazwisko <span style={{color:"var(--red)"}}>*</span></label>
-            <input className={`form-input ${hasError("lastName") ? "input-error" : ""}`}
-              value={form.lastName} onChange={e => set("lastName", e.target.value)} onBlur={() => touch("lastName")} />
-            <FieldError msg={hasError("lastName")} />
+        ))}
+
+        {hiddenFields.length > 0 && (
+          <div style={{ marginTop:8 }}>
+            <button onClick={() => setShowOptional(o => !o)}
+              style={{ background:"none", border:"1px dashed var(--border)", borderRadius:8, padding:"8px 12px", color:"var(--text2)", fontSize:11, fontWeight:600, cursor:"pointer", width:"100%", marginBottom:8 }}>
+              {showOptional ? "▲ Ukryj dodatkowe pola" : `▼ Pokaż dodatkowe pola (${hiddenFields.length})`}
+            </button>
+            {showOptional && (
+              <div style={{ padding:12, background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10 }}>
+                {hiddenFields.map(f => <SchemaField key={f.id} field={f} form={form} set={set} touch={touch} hasError={hasError} />)}
+              </div>
+            )}
           </div>
-        </div>
-        <div className="form-group">
-          <label className="form-label">Telefon</label>
-          <input className={`form-input ${hasError("phone") ? "input-error" : ""}`}
-            value={form.phone} onChange={e => set("phone", e.target.value)} onBlur={() => touch("phone")} />
-          <FieldError msg={hasError("phone")} />
-        </div>
-        <div className="form-group">
-          <label className="form-label">E-mail</label>
-          <input className={`form-input ${hasError("email") ? "input-error" : ""}`}
-            type="email" value={form.email} onChange={e => set("email", e.target.value)} onBlur={() => touch("email")} />
-          <FieldError msg={hasError("email")} />
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div className="form-group"><label className="form-label">Login KW</label>
-            <input className="form-input" value={form.kwLogin} onChange={e => set("kwLogin", e.target.value)} /></div>
-          <div className="form-group"><label className="form-label">Hasło KW</label>
-            <input className="form-input" value={form.kwPassword} onChange={e => set("kwPassword", e.target.value)} /></div>
-        </div>
-        <div className="form-group">
-          <label className="form-label">Prowizja (%)</label>
-          <NumberInput className={`form-input ${hasError("percent") ? "input-error" : ""}`}
-            value={form.percent} onChange={v => set("percent", v)}
-            onBlur={() => touch("percent")} min={0} max={100} />
-          <FieldError msg={hasError("percent")} />
-        </div>
-        <div className="form-group">
-          <label className="form-label">Typ umowy</label>
-          <select className="form-select" value={form.status} onChange={e => set("status", e.target.value)}>
-            <option>ZARZĄDZANIE</option>
-            <option>OBSŁUGA</option>
-          </select>
-        </div>
-        <div className="form-group"><label className="form-label">Metoda rozliczenia</label>
-          <input className="form-input" value={form.billingMethod} onChange={e => set("billingMethod", e.target.value)} /></div>
-        <div className="form-group">
-          <label className="form-label">Dane do faktury</label>
-          <textarea className={`form-textarea ${hasError("invoiceData") ? "input-error" : ""}`}
-            value={form.invoiceData} onChange={e => set("invoiceData", e.target.value)} onBlur={() => touch("invoiceData")} />
-          <FieldError msg={hasError("invoiceData")} />
-        </div>
+        )}
+
         <div className="btn-row">
           <button className="btn btn-ghost" onClick={onClose}>Anuluj</button>
           <button className="btn btn-primary" onClick={() => submit(onSave)}>Zapisz</button>
@@ -4737,22 +4728,24 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
   const [newLeader, setNewLeader] = useState("");
 
   // ── Form Builder state ──────────────────────────────────────────────────
-  const [schemaFields, setSchemaFields] = useState(() => FormSchema.sorted());
+  const [formCat, setFormCat] = useState("apartment"); // konfigurowana kategoria formularza
+  const [schemaFields, setSchemaFields] = useState(() => FormSchema.sorted("apartment"));
   const [fieldModal, setFieldModal] = useState(null); // { field } edycja | { create:true } | null
   const [showSchemaReset, setShowSchemaReset] = useState(false);
   const [deleteFieldId, setDeleteFieldId] = useState(null); // potwierdzenie usunięcia pola własnego
-  const refreshSchema = () => setSchemaFields(FormSchema.sorted());
+  const refreshSchema = (cat = formCat) => setSchemaFields(FormSchema.sorted(cat));
+  const changeFormCat = (cat) => { setFormCat(cat); setSchemaFields(FormSchema.sorted(cat)); };
 
   const toggleFieldVisibility = (id) => {
     const f = schemaFields.find(x => x.id === id);
     if (!f || !isManager) return;
-    FormSchema.setVisible(id, !f.visible);
+    FormSchema.setVisible(id, !f.visible, formCat);
     refreshSchema();
   };
   const toggleFieldRequired = (id) => {
     const f = schemaFields.find(x => x.id === id);
     if (!f || !isManager) return;
-    FormSchema.updateField(id, { required: !f.required });
+    FormSchema.updateField(id, { required: !f.required }, formCat);
     refreshSchema();
   };
   // Reorder w obrębie grupy — zamienia wartości order z sąsiadem w tej samej grupie
@@ -4762,25 +4755,25 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
     if (swap < 0 || swap >= groupFields.length) return;
     const a = groupFields[idx], b = groupFields[swap];
     const orderA = a.order, orderB = b.order;
-    FormSchema.updateField(a.id, { order: orderB });
-    FormSchema.updateField(b.id, { order: orderA });
+    FormSchema.updateField(a.id, { order: orderB }, formCat);
+    FormSchema.updateField(b.id, { order: orderA }, formCat);
     refreshSchema();
   };
   const saveFieldModal = (res) => {
     if (!isManager) return;
-    if (res.mode === "create") FormSchema.addField(res.payload);
-    else FormSchema.updateField(res.id, res.changes);
+    if (res.mode === "create") FormSchema.addField(res.payload, formCat);
+    else FormSchema.updateField(res.id, res.changes, formCat);
     refreshSchema();
     setFieldModal(null);
   };
   const removeCustomField = (id) => {
     if (!isManager) return;
-    FormSchema.removeField(id);
+    FormSchema.removeField(id, formCat);
     refreshSchema();
   };
   const resetSchema = () => {
     if (!isManager) return;
-    FormSchema.resetAll();
+    FormSchema.resetAll(formCat);
     refreshSchema();
     setShowSchemaReset(false);
   };
@@ -5268,15 +5261,28 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
         {/* ═══ FORMULARZ — konfiguracja pól ═══ */}
         {settingsTab === "formbuilder" && (() => {
           const visibleSorted = schemaFields.filter(f => f.visible).sort((a,b) => a.order - b.order);
+          const catLabel = (FORM_CATEGORIES.find(c => c.key === formCat) || {}).label || "";
           const groups = {};
           schemaFields.forEach(f => { if (!groups[f.group]) groups[f.group] = []; groups[f.group].push(f); });
           return (
           <div>
             <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:12 }}>
-              Konfiguracja formularza — Apartament
+              Konfiguracja formularza — {catLabel}
             </div>
+
+            {/* Wybór kategorii formularza */}
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:14 }}>
+              {FORM_CATEGORIES.map(c => (
+                <button key={c.key} onClick={() => changeFormCat(c.key)}
+                  className={`btn ${formCat === c.key ? "btn-primary" : ""}`}
+                  style={{ padding:"6px 16px", fontSize:13 }}>
+                  {c.label}
+                </button>
+              ))}
+            </div>
+
             <p style={{ fontSize:13, color:"var(--text2)", marginBottom:16, lineHeight:1.6 }}>
-              Edytuj pola formularza pozycji: kliknij ⚙ aby zmienić etykietę, typ, opcje i wartości; przełącz „wymagane" (✱) i „widoczność" (👁); zmień kolejność strzałkami ▲▼. Wbudowanych pól nie można usunąć — tylko ukryć.
+              Edytuj pola formularza: kliknij ⚙ aby zmienić etykietę, typ, opcje i wartości; przełącz „wymagane" (✱) i „widoczność" (👁); zmień kolejność strzałkami ▲▼. Wbudowanych pól nie można usunąć — tylko ukryć.
             </p>
 
             <div style={{ display:"flex", gap:24, flexWrap:"wrap", alignItems:"flex-start" }}>
@@ -7328,6 +7334,25 @@ const OwnerDetail = ({ owner, apartments, onBack, onEdit, onSelectApt, renderApt
           </div>
         </>
       )}
+
+      {/* Pola własne właściciela (PAKIET 5) — z konfiguracji formularza */}
+      {(() => {
+        const filled = FormSchema.visible("owner").filter(f => f.custom && (owner[f.id] || owner[f.id] === 0));
+        if (filled.length === 0) return null;
+        return (
+          <div className="detail-section">
+            <div className="detail-section-title"><Icon name="info" size={14} />Dodatkowe informacje</div>
+            {filled.map(f => {
+              const val = owner[f.id];
+              if (f.type === "checkbox") return <div className="detail-row" key={f.id}><span className="detail-label">{f.label}</span><span className="detail-value">Tak</span></div>;
+              if (f.type === "textarea") return <div key={f.id} style={{ marginBottom:10 }}><div style={{ fontSize:10, color:"var(--text2)", textTransform:"uppercase", letterSpacing:"0.1em", fontWeight:700, marginBottom:4 }}>{f.label}</div><p style={{ fontSize:14, lineHeight:1.6, whiteSpace:"pre-line", margin:0 }}>{val}</p></div>;
+              if (f.type === "url") return <div className="detail-row" key={f.id}><span className="detail-label">{f.label}</span><a href={val} target="_blank" rel="noopener noreferrer" style={{ color:"var(--accent)", fontSize:13, fontWeight:600 }}>Otwórz link ↗</a></div>;
+              return <div className="detail-row" key={f.id}><span className="detail-label">{f.label}</span><span className="detail-value">{val}</span></div>;
+            })}
+          </div>
+        );
+      })()}
+
       <div className="detail-section">
         <div className="detail-section-title">Apartamenty ({ownerApts.length})</div>
         {ownerApts.length === 0 ? (
