@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "PowerShell(claude config *)"
+      "PowerShell(claude config *)",
+      "Bash(npx eslint *)",
+      "Bash(grep -oE \"[a-z-]+/[a-z-]+$|Error:\")"
     ]
   }
 }

@@ -1484,6 +1484,19 @@ Standardowe sprzątanie zgodnie z ustaleniami.
 VelarFlow`,
 };
 
+// FIX 1.6 — ściąga zmiennych dla edytora szablonów SMS.
+// UWAGA: lista odzwierciedla DOKŁADNIE tokeny podstawiane w Settings.render() —
+// tylko te są realnie zamieniane przy wysyłce. Dodając nowy token tutaj, dodaj
+// też odpowiedni .replace() w Settings.render().
+const SMS_VARIABLES = [
+  { name: "{aptName}",      example: "Apartament Demo 01",                description: "Nazwa apartamentu" },
+  { name: "{code}",         example: "1234#",                            description: "Kod do skrytki / domofonu" },
+  { name: "{wifi}",         example: "VelarWiFi / haslo123",             description: "Sieć WiFi (pierwsza linia pola WiFi)" },
+  { name: "{address}",      example: "ul. Demonstracyjna 5/3, Warszawa", description: "Adres apartamentu" },
+  { name: "{checkinTime}",  example: "16:00",                            description: "Godzina zameldowania" },
+  { name: "{checkoutTime}", example: "11:00",                            description: "Godzina wymeldowania" },
+];
+
 // ── Categories — user-defined kategorie pozycji ──────────────────────────
 // Każda kategoria ma własny sidebar entry jeśli showInNav=true
 // Ikony dostępne w Icon component: home, check, tasks, users, building, key, info, calendar, star, tent, tree, car, package
@@ -2194,6 +2207,15 @@ const STATUS_COLORS = {
   "Dzisiaj wyjazd gości": "#f97316",
 };
 
+// Ikona statusu apartamentu w listach głównych (kolor brany z STATUS_COLORS)
+const STATUS_ICONS = {
+  "Wolny": "check",
+  "Zajęty": "user",
+  "Wolny/Dzisiaj przyjazd": "wave",
+  "Zajęty/Jutro się zwolni": "calendar",
+  "Dzisiaj wyjazd gości": "logout",
+};
+
 // APT_TYPE_COLORS — dynamiczny lookup z Categories module
 // Obsługuje dostęp przez "ZARZĄDZANIE" → zwraca color z kategorii
 // W starym kodzie używane jako APT_TYPE_COLORS["ZARZĄDZANIE"] albo APT_TYPE_COLORS[apt.status]
@@ -2220,6 +2242,7 @@ const Icon = ({ name, size = 20, color = "currentColor" }) => {
     users: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
     back: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>,
     plus: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
+    minus: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>,
     edit: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
     trash: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>,
     key: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>,
@@ -2249,6 +2272,68 @@ const Icon = ({ name, size = 20, color = "currentColor" }) => {
     swap: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>,
   };
   return icons[name] || null;
+};
+
+// ─── NUMBER INPUT (FIX 1.3 + 1.4) ─────────────────────────────────────────────
+// Trzyma wartość jako STRING (np. "0", "", "40") — konwersja na number dopiero
+// przy zapisie po stronie konsumenta. Dzięki temu zaznaczenie "0" i wpisanie "40"
+// działa naturalnie. onFocus zaznacza całość. Natywne strzałki są ukryte CSS-em;
+// `steppers` (domyślnie true) renderuje nowoczesne przyciski +/- (32×32).
+// W ciasnych wierszach (qty obok nazwy) używaj `steppers={false}`.
+const NumberInput = ({
+  value, onChange, min, max, step = 1,
+  placeholder, disabled = false, steppers = true,
+  className = "form-input", style = {}, onBlur,
+}) => {
+  const inpRef = useRef(null);
+  const stepStr = String(step);
+  const decimals = stepStr.includes(".") ? stepStr.split(".")[1].length : 0;
+
+  const fmt = (n) => {
+    if (min != null && n < Number(min)) n = Number(min);
+    if (max != null && n > Number(max)) n = Number(max);
+    return decimals ? n.toFixed(decimals) : String(n);
+  };
+
+  const bump = (dir) => {
+    if (disabled) return;
+    const parsed = parseFloat(value);
+    const cur = isNaN(parsed) ? 0 : parsed;
+    onChange(fmt(cur + dir * Number(step)));
+    requestAnimationFrame(() => { if (inpRef.current) inpRef.current.focus(); });
+  };
+
+  const input = (
+    <input
+      ref={inpRef}
+      className={`${className} num-input`}
+      type="number"
+      inputMode={decimals ? "decimal" : "numeric"}
+      value={value == null ? "" : value}
+      min={min} max={max} step={step}
+      placeholder={placeholder}
+      disabled={disabled}
+      onChange={e => onChange(e.target.value)}
+      onFocus={e => e.target.select()}
+      onBlur={onBlur}
+      style={steppers ? undefined : style}
+    />
+  );
+
+  if (!steppers) return input;
+
+  const num = parseFloat(value);
+  return (
+    <div className="num-input-wrap" style={style}>
+      <button type="button" className="num-stepper" tabIndex={-1} aria-label="Zmniejsz"
+        disabled={disabled || (min != null && !isNaN(num) && num <= Number(min))}
+        onClick={() => bump(-1)}><Icon name="minus" size={16} /></button>
+      {input}
+      <button type="button" className="num-stepper" tabIndex={-1} aria-label="Zwiększ"
+        disabled={disabled || (max != null && !isNaN(num) && num >= Number(max))}
+        onClick={() => bump(1)}><Icon name="plus" size={16} /></button>
+    </div>
+  );
 };
 
 // ─── BRAND LOGO ──────────────────────────────────────────────────────────────
@@ -2624,6 +2709,15 @@ const styles = `
   .apt-row-left { display: flex; align-items: center; gap: 10px; }
   .apt-row-name { font-family: var(--font-display); font-size: 18px; font-weight: 400; letter-spacing: 0.06em; }
   .apt-row-note { font-size: 11px; color: var(--accent2); margin-top: 2px; font-weight: 600; }
+  /* Kafelki statusu/zadań/pożyczek w wierszu listy (styl iOS — kwadrat z zaokrąglonymi rogami) */
+  .apt-ind {
+    width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0; padding: 0;
+    border: 1px solid var(--border); background: var(--surface2);
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  button.apt-ind { cursor: pointer; transition: all 0.15s; }
+  button.apt-ind:hover { border-color: var(--accent); background: rgba(59,130,246,0.14); }
+  button.apt-ind:active { transform: scale(0.92); }
 
   .detail-hero { background: var(--surface); padding: 24px 20px; border-bottom: 1px solid var(--border); }
   .detail-hero h2 { font-family: var(--font-display); font-size: 36px; font-weight: 400; letter-spacing: 0.08em; line-height: 1; }
@@ -2787,12 +2881,13 @@ const styles = `
     margin-left: auto; flex-shrink: 0;
   }
   .qty-btn {
-    width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--border);
-    background: var(--surface2); color: var(--text); font-size: 16px; font-weight: 700;
+    width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface2); color: var(--text); font-size: 18px; font-weight: 700;
     cursor: pointer; display: flex; align-items: center; justify-content: center;
-    transition: all 0.15s;
+    transition: all 0.15s; padding: 0; line-height: 1;
   }
-  .qty-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .qty-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: rgba(59,130,246,0.12); }
+  .qty-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .qty-val { min-width: 28px; text-align: center; font-weight: 700; font-size: 15px; }
 
   .sms-template-box {
@@ -2802,6 +2897,41 @@ const styles = `
     font-family: var(--font-body);
   }
   .sms-var { color: var(--accent); font-weight: 700; }
+
+  /* FIX 1.1 — nagłówek sekcji ustawień (tytuł + przycisk, responsywny) */
+  .settings-cat-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+  @media (max-width: 640px) {
+    .settings-cat-head { flex-direction: column; align-items: flex-start; gap: 12px; }
+  }
+
+  /* FIX 1.3/1.4 — NumberInput: ukryte natywne strzałki + nowoczesne steppery +/- */
+  .num-input::-webkit-outer-spin-button,
+  .num-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  .num-input { -moz-appearance: textfield; appearance: textfield; }
+  .num-input-wrap { display: flex; align-items: center; gap: 8px; }
+  .num-input-wrap .num-input { flex: 1; min-width: 0; width: auto; text-align: center; }
+  .num-stepper {
+    width: 32px; height: 32px; flex-shrink: 0; padding: 0;
+    border-radius: 8px; border: 1px solid var(--border);
+    background: var(--surface2); color: var(--text);
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .num-stepper:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); background: rgba(59,130,246,0.12); }
+  .num-stepper:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* FIX 1.6 — ściąga zmiennych w edytorze SMS */
+  .sms-vars-panel { margin: 10px 0; border: 1px solid var(--border); border-radius: 10px; background: var(--surface2); overflow: hidden; }
+  .sms-vars-panel > summary { cursor: pointer; padding: 10px 12px; font-size: 12px; font-weight: 700; color: var(--accent); letter-spacing: 0.04em; list-style: none; user-select: none; }
+  .sms-vars-panel > summary::-webkit-details-marker { display: none; }
+  .sms-vars-panel > summary::before { content: "▸ "; }
+  .sms-vars-panel[open] > summary::before { content: "▾ "; }
+  .sms-vars-list { padding: 4px 12px 12px; display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto; }
+  .sms-var-chip { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; cursor: pointer; transition: all 0.15s; text-align: left; }
+  .sms-var-chip:hover { border-color: var(--accent); background: rgba(59,130,246,0.10); }
+  .sms-var-chip code { font-family: monospace; font-size: 12px; font-weight: 700; color: var(--accent); }
+  .sms-var-chip .sms-var-desc { font-size: 11px; color: var(--text); }
+  .sms-var-chip .sms-var-ex { font-size: 11px; color: var(--text2); }
 
   .history-row {
     display: flex; align-items: center; gap: 10px;
@@ -3162,6 +3292,16 @@ const ApartmentForm = ({ apt, owners, onSave, onClose, onGoToSettings, defaultCa
         </div>
       );
     }
+    if (field.type === "number") {
+      return (
+        <div className="form-group" key={field.id}>
+          <label className="form-label">{field.label}{field.required && <span style={{color:"var(--red)",marginLeft:3}}>*</span>}</label>
+          <NumberInput className={`form-input ${hasError(field.id) ? "input-error" : ""}`}
+            value={form[field.id] || ""} onChange={v => set(field.id, v)} onBlur={() => touch(field.id)} min={0} />
+          <FieldError msg={hasError(field.id)} />
+        </div>
+      );
+    }
     return (
       <div className="form-group" key={field.id}>
         <label className="form-label">{field.label}{field.required && <span style={{color:"var(--red)",marginLeft:3}}>*</span>}</label>
@@ -3355,9 +3495,9 @@ const OwnerForm = ({ owner, onSave, onClose }) => {
         </div>
         <div className="form-group">
           <label className="form-label">Prowizja (%)</label>
-          <input className={`form-input ${hasError("percent") ? "input-error" : ""}`}
-            type="number" value={form.percent} onChange={e => set("percent", parseInt(e.target.value) || 0)}
-            onBlur={() => touch("percent")} min="0" max="100" />
+          <NumberInput className={`form-input ${hasError("percent") ? "input-error" : ""}`}
+            value={form.percent} onChange={v => set("percent", v)}
+            onBlur={() => touch("percent")} min={0} max={100} />
           <FieldError msg={hasError("percent")} />
         </div>
         <div className="form-group">
@@ -3653,12 +3793,47 @@ const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
     items: f.items.map((it, i) => i === idx ? { ...it, ...patch } : it),
   }));
 
+  // ── Dynamiczne, dwukierunkowe filtrowanie pozycji ↔ apartamentu źródłowego ──
+  // Wyposażenie apartamentu = zapis z localStorage (apt_equip_<id>) lub seed STANDARD_EQUIPMENT
+  // (mirror logiki z ApartmentDetail). Dzięki temu nie da się wypożyczyć pozycji,
+  // której apartament źródłowy nie ma na wyposażeniu.
+  const equipNamesFor = (aptId) => {
+    const stored = Storage.get(`apt_equip_${aptId}`);
+    const list = Array.isArray(stored) ? stored : STANDARD_EQUIPMENT;
+    return list.map(e => e.name);
+  };
+  // Pozycje do wyboru: jeśli wybrano „skąd" → tylko z tego apartamentu;
+  // jeśli nie → pełna lista (suma wyposażenia wszystkich apartamentów).
+  const itemOptions = (() => {
+    if (form.fromAptId) return equipNamesFor(Number(form.fromAptId));
+    const set = new Set();
+    apartments.forEach(a => equipNamesFor(a.id).forEach(n => set.add(n)));
+    return [...set].sort((a, b) => a.localeCompare(b, "pl"));
+  })();
+  // Apartamenty „skąd": jeśli wybrano pozycje → tylko te, które mają WSZYSTKIE wybrane pozycje.
+  const namedItems = form.items.map(i => (i.name || "").trim()).filter(Boolean);
+  const sourceApts = namedItems.length === 0
+    ? apartments
+    : apartments.filter(a => { const names = equipNamesFor(a.id); return namedItems.every(it => names.includes(it)); });
+  const sourceFiltered = namedItems.length > 0 && sourceApts.length < apartments.length;
+
+  // Zmiana apartamentu źródłowego — wyczyść pozycje, których nowy apartament nie ma.
+  const setFromApt = (id) => setForm(f => {
+    if (!id) return { ...f, fromAptId: "" };
+    const names = equipNamesFor(Number(id));
+    return { ...f, fromAptId: id, items: f.items.map(it => names.includes(it.name) ? it : { ...it, name: "" }) };
+  });
+
   const submit = () => {
     if (!form.fromAptId) { setError("Wybierz apartament, z którego pożyczasz"); return; }
     if (!form.toAptId)   { setError("Wybierz apartament, do którego pożyczasz"); return; }
     if (Number(form.fromAptId) === Number(form.toAptId)) { setError("Apartamenty muszą być różne"); return; }
     const items = form.items.filter(i => i.name.trim());
     if (items.length === 0) { setError("Dodaj przynajmniej jedną pozycję"); return; }
+    // Twardy blok: apartament źródłowy musi mieć każdą pozycję na wyposażeniu
+    const haveNames = equipNamesFor(Number(form.fromAptId));
+    const missing = items.filter(i => !haveNames.includes(i.name.trim()));
+    if (missing.length) { setError(`Apartament źródłowy nie ma na wyposażeniu: ${missing.map(m => m.name).join(", ")}`); return; }
 
     const entry = Loans.add({
       fromAptId: form.fromAptId,
@@ -3807,11 +3982,16 @@ const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
               <select
                 className="form-select"
                 value={form.fromAptId}
-                onChange={e => setForm(f => ({ ...f, fromAptId: e.target.value }))}
+                onChange={e => setFromApt(e.target.value)}
               >
                 <option value="">— wybierz —</option>
-                {apartments.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                {sourceApts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
+              {sourceFiltered && (
+                <div style={{ fontSize:11, color:"var(--text2)", marginTop:4 }}>
+                  Pokazano tylko apartamenty mające wybrane pozycje na wyposażeniu.
+                </div>
+              )}
             </div>
 
             <div className="form-group">
@@ -3830,22 +4010,31 @@ const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
 
             <div className="form-group">
               <label className="form-label">Pozycje do pożyczenia</label>
-              {form.items.map((item, idx) => (
+              {!form.fromAptId && (
+                <div style={{ fontSize:11, color:"var(--text2)", marginBottom:6 }}>
+                  Lista wszystkich pozycji ze wszystkich apartamentów — po wyborze pozycji lista „skąd" zawęzi się do apartamentów, które ją mają.
+                </div>
+              )}
+              {form.items.map((item, idx) => {
+                const opts = item.name && !itemOptions.includes(item.name) ? [item.name, ...itemOptions] : itemOptions;
+                return (
                 <div key={idx} style={{ display:"flex", gap:6, marginBottom:6 }}>
-                  <input
-                    className="form-input"
+                  <select
+                    className="form-select"
                     style={{ flex:1 }}
-                    placeholder="np. Czajnik, Poduszka, Pralka"
                     value={item.name}
                     onChange={e => updateItemLine(idx, { name: e.target.value })}
-                  />
-                  <input
+                  >
+                    <option value="">{form.fromAptId ? "— wybierz pozycję —" : "— wybierz pozycję (dowolny apartament) —"}</option>
+                    {opts.map(n => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                  <NumberInput
                     className="form-input"
                     style={{ width:70 }}
-                    type="number"
+                    steppers={false}
                     min={1}
                     value={item.qty}
-                    onChange={e => updateItemLine(idx, { qty: e.target.value })}
+                    onChange={v => updateItemLine(idx, { qty: v })}
                   />
                   {form.items.length > 1 && (
                     <button
@@ -3854,7 +4043,8 @@ const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
                     >−</button>
                   )}
                 </div>
-              ))}
+                );
+              })}
               <button
                 onClick={addItemLine}
                 style={{ background:"none", border:"1px dashed var(--border)", borderRadius:8, padding:"8px 12px", color:"var(--text2)", fontSize:12, fontWeight:600, cursor:"pointer", width:"100%", marginTop:4 }}
@@ -3940,6 +4130,13 @@ const FilesView = ({ apartments, files, onUpdate, currentUser }) => {
     onUpdate && onUpdate();
   };
 
+  // FIX 1.5 — otwierając modal pre-fill kategorię aktywnym filtrem
+  // ("Wszystkie" → domyślna "other", którą user może zmienić)
+  const openAddForm = () => {
+    setForm(f => ({ ...f, category: filterCat !== "all" ? filterCat : "other" }));
+    setShowForm(true);
+  };
+
   const aptName = (id) => ((apartments.find(a => a.id === id) || {}).name) || "—";
   const catLabel = (id) => ((FILE_CATEGORIES.find(c => c.id === id) || {}).label) || "Inne";
   const catColor = {
@@ -3953,7 +4150,7 @@ const FilesView = ({ apartments, files, onUpdate, currentUser }) => {
         <h1>Pliki</h1>
         <div className="header-actions">
           {canManage && (
-            <button className="icon-btn" onClick={() => setShowForm(true)} title="Dodaj plik">
+            <button className="icon-btn" onClick={openAddForm} title="Dodaj plik">
               <Icon name="plus" size={16} color="var(--accent)" />
             </button>
           )}
@@ -3995,7 +4192,7 @@ const FilesView = ({ apartments, files, onUpdate, currentUser }) => {
             <div className="empty-icon"><Icon name="file" size={40} /></div>
             <h3>Brak plików</h3>
             {canManage && (
-              <button className="btn btn-primary" style={{ marginTop:16 }} onClick={() => setShowForm(true)}>
+              <button className="btn btn-primary" style={{ marginTop:16 }} onClick={openAddForm}>
                 + Dodaj pierwszy plik
               </button>
             )}
@@ -4125,6 +4322,81 @@ const FilesView = ({ apartments, files, onUpdate, currentUser }) => {
             </div>
           </div>
         </div>
+      )}
+    </div>
+  );
+};
+
+// FIX 1.6 — wyniesione z SettingsView. Wcześniej zdefiniowane WEWNĄTRZ SettingsView,
+// przez co przy każdym setDraft (każdy znak) komponent był tworzony na nowo i textarea
+// traciła focus (ESLint: react-hooks/static-components). Top-level = stabilny typ.
+// Dodaje też panel "Dostępne zmienne" z wstawianiem tokenu w miejscu kursora.
+const TemplateCard = ({ type, color, isEditing, template, isDefault, isManager, draft, setDraft, saved, onStartEdit, onSave, onReset, onCancel }) => {
+  const taRef = useRef(null);
+
+  const insertVar = (token) => {
+    const ta = taRef.current;
+    const cur = draft || "";
+    if (!ta) { setDraft(cur + token); return; }
+    const start = ta.selectionStart, end = ta.selectionEnd;
+    setDraft(cur.slice(0, start) + token + cur.slice(end));
+    // textarea może się przemontować po setDraft — przywróć focus i kursor po tokenie
+    requestAnimationFrame(() => {
+      const el = taRef.current;
+      if (el) { const pos = start + token.length; el.focus(); el.setSelectionRange(pos, pos); }
+    });
+  };
+
+  return (
+    <div style={{ background:"var(--surface)", border:`1px solid ${color}33`, borderLeft:`3px solid ${color}`, borderRadius:"var(--radius)", padding:16, marginBottom:16 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10, flexWrap:"wrap", gap:8 }}>
+        <div style={{ fontFamily:"var(--font-display)", fontSize:20, letterSpacing:"0.08em", color }}>{type}</div>
+        {!isDefault && (
+          <span style={{ fontSize:9, fontWeight:700, letterSpacing:"0.08em", padding:"2px 8px", borderRadius:6, background:"rgba(245,158,11,0.15)", color:"var(--yellow)" }}>
+            ZMODYFIKOWANY
+          </span>
+        )}
+      </div>
+
+      {!isEditing ? (
+        <>
+          <div className="sms-template-box" style={{ marginBottom:10 }}>{template}</div>
+          {isManager && (
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+              <button className="btn btn-primary" style={{ flex:1, minWidth:100 }} onClick={onStartEdit}>✏ Edytuj</button>
+              {!isDefault && (
+                <button className="btn" style={{ flex:1, minWidth:100 }} onClick={onReset}>↺ Reset do domyślnego</button>
+              )}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <details className="sms-vars-panel" open>
+            <summary>Dostępne zmienne — kliknij, aby wstawić</summary>
+            <div className="sms-vars-list">
+              {SMS_VARIABLES.map(v => (
+                <button type="button" key={v.name} className="sms-var-chip" onClick={() => insertVar(v.name)}>
+                  <code>{v.name}</code>
+                  <span className="sms-var-desc">{v.description}</span>
+                  <span className="sms-var-ex">np. {v.example}</span>
+                </button>
+              ))}
+            </div>
+          </details>
+          <textarea
+            ref={taRef}
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            style={{ width:"100%", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10, padding:"12px", color:"var(--text)", fontSize:13, fontFamily:"var(--font-body)", lineHeight:1.7, resize:"vertical", minHeight:200, boxSizing:"border-box" }}
+          />
+          <div style={{ display:"flex", gap:8, marginTop:10 }}>
+            <button className="btn btn-primary" style={{ flex:1 }} onClick={onSave}>
+              {saved ? "✓ Zapisano!" : "✓ Zapisz"}
+            </button>
+            <button className="btn" style={{ flex:1 }} onClick={onCancel}>Anuluj</button>
+          </div>
+        </>
       )}
     </div>
   );
@@ -4300,55 +4572,6 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
   // Apartamenty z override
   const aptsWithOverride = apartments.filter(a => (settings.smsOverrides || {})[a.id]);
 
-  const TemplateCard = ({ type, color }) => {
-    const isEditing = editingType === type;
-    const template = (settings.smsTemplates || {})[type] || DEFAULT_SMS_TEMPLATES[type];
-    const isDefault = template === DEFAULT_SMS_TEMPLATES[type];
-    return (
-      <div style={{ background:"var(--surface)", border:`1px solid ${color}33`, borderLeft:`3px solid ${color}`, borderRadius:"var(--radius)", padding:16, marginBottom:16 }}>
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10, flexWrap:"wrap", gap:8 }}>
-          <div style={{ fontFamily:"var(--font-display)", fontSize:20, letterSpacing:"0.08em", color }}>{type}</div>
-          {!isDefault && (
-            <span style={{ fontSize:9, fontWeight:700, letterSpacing:"0.08em", padding:"2px 8px", borderRadius:6, background:"rgba(245,158,11,0.15)", color:"var(--yellow)" }}>
-              ZMODYFIKOWANY
-            </span>
-          )}
-        </div>
-
-        {!isEditing ? (
-          <>
-            <div className="sms-template-box" style={{ marginBottom:10 }}>{template}</div>
-            {isManager && (
-              <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-                <button className="btn btn-primary" style={{ flex:1, minWidth:100 }} onClick={() => startEdit(type)}>✏ Edytuj</button>
-                {!isDefault && (
-                  <button className="btn" style={{ flex:1, minWidth:100 }} onClick={() => resetToDefault(type)}>↺ Reset do domyślnego</button>
-                )}
-              </div>
-            )}
-          </>
-        ) : (
-          <>
-            <p style={{ fontSize:11, color:"var(--text2)", marginBottom:8 }}>
-              Zmienne: <span className="sms-var">{"{aptName}"}</span> <span className="sms-var">{"{code}"}</span> <span className="sms-var">{"{wifi}"}</span> <span className="sms-var">{"{address}"}</span> <span className="sms-var">{"{checkinTime}"}</span> <span className="sms-var">{"{checkoutTime}"}</span>
-            </p>
-            <textarea
-              value={draft}
-              onChange={e => setDraft(e.target.value)}
-              style={{ width:"100%", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10, padding:"12px", color:"var(--text)", fontSize:13, fontFamily:"var(--font-body)", lineHeight:1.7, resize:"vertical", minHeight:200, boxSizing:"border-box" }}
-            />
-            <div style={{ display:"flex", gap:8, marginTop:10 }}>
-              <button className="btn btn-primary" style={{ flex:1 }} onClick={saveEdit}>
-                {saved ? "✓ Zapisano!" : "✓ Zapisz"}
-              </button>
-              <button className="btn" style={{ flex:1 }} onClick={() => setEditingType(null)}>Anuluj</button>
-            </div>
-          </>
-        )}
-      </div>
-    );
-  };
-
   return (
     <div>
       <div className="header">
@@ -4437,7 +4660,7 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
         {/* ═══ KATEGORIE POZYCJI ═══ */}
         {settingsTab === "categories" && (
           <div>
-            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
+            <div className="settings-cat-head">
               <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase" }}>
                 Kategorie pozycji ({categories.length})
               </div>
@@ -4724,9 +4947,22 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
               Dla każdej kategorii możesz ustawić własny szablon SMS. Nadpisanie indywidualne w widoku pozycji → zakładka SMS.
             </p>
 
-            {categories.map(cat => (
-              <TemplateCard key={cat.id} type={cat.name} color={cat.color} />
-            ))}
+            {categories.map(cat => {
+              const tpl = (settings.smsTemplates || {})[cat.name] || DEFAULT_SMS_TEMPLATES[cat.name];
+              return (
+                <TemplateCard key={cat.id} type={cat.name} color={cat.color}
+                  isEditing={editingType === cat.name}
+                  template={tpl}
+                  isDefault={tpl === DEFAULT_SMS_TEMPLATES[cat.name]}
+                  isManager={isManager}
+                  draft={draft} setDraft={setDraft} saved={saved}
+                  onStartEdit={() => startEdit(cat.name)}
+                  onSave={saveEdit}
+                  onReset={() => resetToDefault(cat.name)}
+                  onCancel={() => setEditingType(null)}
+                />
+              );
+            })}
 
             <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginTop:24, marginBottom:12 }}>
               Apartamenty z własnym szablonem ({aptsWithOverride.length})
@@ -5102,8 +5338,8 @@ const CleaningManagerView = ({ apartments, cleaningSessions, onAddSession, onUpd
 };
 
 // ─── APARTMENT DETAIL — rozszerzony z nowymi zakładkami ──────────────────────
-const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartments, onBack, onEdit, onAddTask, onSelectTask, onRefreshLoans, currentUser }) => {
-  const [tab, setTab] = useState("info");
+const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartments, onBack, onEdit, onAddTask, onSelectTask, onRefreshLoans, currentUser, initialTab }) => {
+  const [tab, setTab] = useState(initialTab || "info");
   const [taskFilter, setTaskFilter] = useState("Wszystkie");
 
   // ── Uprawnienia ──────────────────────────────────────────────────────────
@@ -5700,14 +5936,14 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
                 onChange={e => setNewItemName(s => ({ ...s, equip: e.target.value }))}
                 onKeyDown={e => { if (e.key === "Enter") addInventoryItem("equip"); }}
               />
-              <input
+              <NumberInput
                 className="form-input"
                 style={{ width:70 }}
-                type="number"
+                steppers={false}
                 min={1}
                 placeholder="szt."
                 value={newItemQty.equip}
-                onChange={e => setNewItemQty(s => ({ ...s, equip: e.target.value }))}
+                onChange={v => setNewItemQty(s => ({ ...s, equip: v }))}
               />
               <button
                 className="btn btn-primary"
@@ -5756,21 +5992,50 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
               const ia = catOrder.indexOf(a), ib = catOrder.indexOf(b);
               return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
             });
+            // FIX 1.7 — pozycje wypożyczone z tego apartamentu (aktywne pożyczki wychodzące).
+            // Nazwy w pożyczkach to wolny tekst, więc dopasowanie jest znormalizowane
+            // (lowercase + zwinięte spacje) z podciągiem, by "Czajnik" trafiał w
+            // "Czajnik elektryczny", "Telewizor" w "Telewizor (sypialnia)" itd.
+            const activeOut = (loans || []).filter(l => l.status === "active" && l.fromAptId === apt.id);
+            const normName = (s) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+            const namesMatch = (a, b) => {
+              const x = normName(a), y = normName(b);
+              if (!x || !y) return false;
+              if (x === y) return true;
+              const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+              return short.length >= 3 && long.includes(short);
+            };
+            const loanForItem = (name) =>
+              activeOut.find(l => (l.items || []).some(it => namesMatch(it.name, name))) || null;
+            const aptNameById = (id) => ((apartments || []).find(a => a.id === id) || {}).name || "inny apartament";
             return sortedCats.map(cat => (
               <div key={cat} style={{ marginBottom:16 }}>
                 <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6, paddingBottom:4, borderBottom:"1px solid var(--border)" }}>
                   {cat} ({byCat[cat].length})
                 </div>
-                {byCat[cat].map(item => (
-                  <div key={item.id} className="inventory-row">
-                    <span style={{ fontSize:14, flex:1 }}>{item.name}</span>
-                    <div className="inventory-qty">
-                      {canEdit && <button className="qty-btn" onClick={() => changeQty("equip", item.id, -1)}>−</button>}
-                      <span className="qty-val">{item.qty}</span>
-                      {canEdit && <button className="qty-btn" onClick={() => changeQty("equip", item.id, +1)}>+</button>}
+                {byCat[cat].map(item => {
+                  const loan = loanForItem(item.name);
+                  return (
+                    <div key={item.id} className="inventory-row">
+                      <div style={{ flex:1, minWidth:0, display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
+                        <span style={{ fontSize:14, opacity: loan ? 0.6 : 1 }}>{item.name}</span>
+                        {loan && (
+                          <button
+                            type="button"
+                            onClick={() => setTab("loans")}
+                            title={`Wypożyczone od ${loan.borrowedAt ? loan.borrowedAt.slice(0,10) : "—"}${loan.returnedAt ? ` do ${loan.returnedAt.slice(0,10)}` : " (brak planowanej daty zwrotu)"}`}
+                            style={{ display:"inline-flex", alignItems:"center", gap:4, fontSize:10, fontWeight:700, letterSpacing:"0.04em", padding:"2px 8px", borderRadius:6, background:"rgba(245,158,11,0.15)", color:"var(--yellow)", border:"1px solid rgba(245,158,11,0.3)", cursor:"pointer", whiteSpace:"nowrap" }}
+                          >🔄 Wypożyczone do {aptNameById(loan.toAptId)}</button>
+                        )}
+                      </div>
+                      <div className="inventory-qty">
+                        {canEdit && <button className="qty-btn" onClick={() => changeQty("equip", item.id, -1)}>−</button>}
+                        <span className="qty-val">{item.qty}</span>
+                        {canEdit && <button className="qty-btn" onClick={() => changeQty("equip", item.id, +1)}>+</button>}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ));
           })()}
@@ -5802,14 +6067,14 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
                 value={newItemSize}
                 onChange={e => setNewItemSize(e.target.value)}
               />
-              <input
+              <NumberInput
                 className="form-input"
                 style={{ width:70 }}
-                type="number"
+                steppers={false}
                 min={1}
                 placeholder="szt."
                 value={newItemQty.text}
-                onChange={e => setNewItemQty(s => ({ ...s, text: e.target.value }))}
+                onChange={v => setNewItemQty(s => ({ ...s, text: v }))}
               />
               <button
                 className="btn btn-primary"
@@ -5866,14 +6131,14 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
                       {ORDER_ITEMS.map(name => <option key={name} value={name} />)}
                     </datalist>
                   </div>
-                  <input
+                  <NumberInput
                     className="form-input"
                     style={{ width:70 }}
-                    type="number"
+                    steppers={false}
                     min={1}
                     placeholder="szt."
                     value={line.qty}
-                    onChange={e => updateOrderLine(idx, { qty: e.target.value })}
+                    onChange={v => updateOrderLine(idx, { qty: v })}
                   />
                   {newOrder.items.length > 1 && (
                     <button
@@ -6023,13 +6288,22 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
               </div>
               <div className="form-group">
                 <label className="form-label">Pozycje</label>
-                {loanForm.items.map((item, idx) => (
+                {/* FIX 1.7 — pozycje ograniczone do wyposażenia TEGO apartamentu (źródło stałe).
+                    Nie da się wypożyczyć rzeczy, której apartament nie ma na wyposażeniu. */}
+                {loanForm.items.map((item, idx) => {
+                  const aptEquipNames = [...new Set((equipment || []).map(e => e.name))];
+                  const opts = item.name && !aptEquipNames.includes(item.name) ? [item.name, ...aptEquipNames] : aptEquipNames;
+                  return (
                   <div key={idx} style={{ display:"flex", gap:6, marginBottom:6 }}>
-                    <input className="form-input" style={{ flex:1 }} placeholder="np. Czajnik, Poduszka" value={item.name} onChange={e => updateLoanLine(idx, { name: e.target.value })} />
-                    <input className="form-input" style={{ width:60 }} type="number" min={1} value={item.qty} onChange={e => updateLoanLine(idx, { qty: e.target.value })} />
+                    <select className="form-select" style={{ flex:1 }} value={item.name} onChange={e => updateLoanLine(idx, { name: e.target.value })}>
+                      <option value="">— wybierz pozycję —</option>
+                      {opts.map(n => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                    <NumberInput className="form-input" style={{ width:60 }} steppers={false} min={1} value={item.qty} onChange={v => updateLoanLine(idx, { qty: v })} />
                     {loanForm.items.length > 1 && <button onClick={() => removeLoanLine(idx)} style={{ background:"rgba(239,68,68,0.1)", border:"none", borderRadius:8, padding:"0 10px", color:"var(--red)", cursor:"pointer" }}>−</button>}
                   </div>
-                ))}
+                  );
+                })}
                 <button onClick={addLoanLine} style={{ background:"none", border:"1px dashed var(--border)", borderRadius:8, padding:"6px 12px", color:"var(--text2)", fontSize:11, fontWeight:600, cursor:"pointer", width:"100%", marginTop:4 }}>+ Kolejna pozycja</button>
               </div>
               <div className="form-group">
@@ -6384,7 +6658,7 @@ const TaskDetail = ({ task, apt, onBack, onEdit, onDelete, onComplete, onAccept,
 
               <div className="form-group">
                 <label className="form-label">Koszt netto (zł)</label>
-                <input className="form-input" type="number" step="0.01" placeholder="0.00" value={protocol.costNet} onChange={e => setP("costNet", e.target.value)} />
+                <NumberInput className="form-input" step={0.01} min={0} placeholder="0.00" value={protocol.costNet} onChange={v => setP("costNet", v)} />
               </div>
 
               <div className="form-group">
@@ -6592,7 +6866,45 @@ export default function App() {
   const refreshLoans      = () => setLoans(Loans.getAll());
   const refreshFiles      = () => setFiles(Files.getAll());
 
+  // Ikonki statusu przy wierszu apartamentu w listach głównych:
+  //  • zadanie — czerwone = oczekujące, żółte = w trakcie
+  //  • pożyczka — żółte = apartament ma aktywną pożyczkę (z lub do)
+  // Zwykła funkcja (nie komponent) — wstawiana inline, bez resetu stanu.
+  const renderAptIndicators = (apt) => {
+    const active = tasks.filter(t => t.apartmentId === apt.id && (t.status === "W trakcie" || t.status === "Nie rozpoczęto"));
+    const inProg = active.some(t => t.status === "W trakcie");
+    const hasTask = active.length > 0;
+    const hasLoan = (loans || []).some(l => l.status === "active" && (l.fromAptId === apt.id || l.toAptId === apt.id));
+    return (
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:6 }}>
+        {/* Status — kafelek nieklikalny, kolor wg statusu, pierwszy od lewej */}
+        <div className="apt-ind" title={`Status: ${apt.aptStatus || "—"}`}>
+          <Icon name={STATUS_ICONS[apt.aptStatus] || "home"} size={16} color={STATUS_COLORS[apt.aptStatus] || "#888"} />
+        </div>
+        {/* Zadania — klik → zakładka Zadania apartamentu; przygaszone gdy brak */}
+        <button type="button" className="apt-ind"
+          title={hasTask ? (inProg ? "Zadanie w trakcie — otwórz zadania" : "Oczekujące zadanie — otwórz zadania") : "Zadania apartamentu"}
+          onClick={(e) => { e.stopPropagation(); openApt(apt, "zadania"); }}>
+          <span style={{ display:"inline-flex", opacity: hasTask ? 1 : 0.4 }}>
+            <Icon name="tasks" size={16} color={hasTask ? (inProg ? "var(--yellow)" : "var(--red)") : "var(--text2)"} />
+          </span>
+        </button>
+        {/* Pożyczki — klik → zakładka Pożyczki apartamentu; przygaszone gdy brak */}
+        <button type="button" className="apt-ind"
+          title={hasLoan ? "Aktywna pożyczka — otwórz pożyczki" : "Pożyczki apartamentu"}
+          onClick={(e) => { e.stopPropagation(); openApt(apt, "loans"); }}>
+          <span style={{ display:"inline-flex", opacity: hasLoan ? 1 : 0.4 }}>
+            <Icon name="swap" size={16} color={hasLoan ? "var(--yellow)" : "var(--text2)"} />
+          </span>
+        </button>
+      </div>
+    );
+  };
+
   const [selectedApt, setSelectedApt] = useState(null);
+  const [aptInitialTab, setAptInitialTab] = useState(null);
+  // Otwórz apartament na konkretnej zakładce (klik w ikonę w wierszu listy)
+  const openApt = (apt, initialTab = null) => { setAptInitialTab(initialTab); setSelectedApt(apt); };
   const [selectedTask, setSelectedTask] = useState(null);
   const [selectedOwner, setSelectedOwner] = useState(null);
 
@@ -6730,6 +7042,8 @@ export default function App() {
   };
 
   const saveOwner = async (form) => {
+    // FIX 1.3 — NumberInput trzyma prowizję jako string; konwersja na number przy zapisie
+    form = { ...form, percent: (form.percent === "" || form.percent == null) ? 0 : (Number(form.percent) || 0) };
     if (!guard(currentUser, "write:owners", (m) => showToast(`🚫 ${m}`, "forbidden"))) return;
     try {
       if (editingOwner) {
@@ -7074,8 +7388,8 @@ export default function App() {
       <div className="app-root">
         <SidebarNav />
         <Shell {...sp}>
-          <ApartmentDetail apt={selectedApt} owner={owner} tasks={tasks} cleaningSessions={cleaningSessions} loans={loans} apartments={apartments} currentUser={currentUser}
-            onBack={() => setSelectedApt(null)}
+          <ApartmentDetail apt={selectedApt} owner={owner} tasks={tasks} cleaningSessions={cleaningSessions} loans={loans} apartments={apartments} currentUser={currentUser} initialTab={aptInitialTab}
+            onBack={() => { setSelectedApt(null); setAptInitialTab(null); }}
             onEdit={() => { setEditingApt(selectedApt); setShowAptForm(true); }}
             onAddTask={() => { setPrefillApt(selectedApt.id); setShowTaskForm(true); }}
             onSelectTask={(task) => setSelectedTask(task)}
@@ -7240,31 +7554,15 @@ export default function App() {
               {filteredApts.length === 0
                 ? <div className="empty"><h3>Brak wyników</h3><p style={{ fontSize:13,color:"var(--text2)",marginTop:6 }}>Zmień kryteria wyszukiwania</p></div>
                 : filteredApts.map(apt => {
-                  // Ikona aktywnego zadania (#6)
-                  const activeTasks = tasks.filter(t => t.apartmentId === apt.id && (t.status === "W trakcie" || t.status === "Nie rozpoczęto"));
-                  const hasInProgress = activeTasks.some(t => t.status === "W trakcie");
-                  const hasPending    = activeTasks.some(t => t.status === "Nie rozpoczęto");
                   return (
-                    <div key={apt.id} className="apt-row" onClick={() => setSelectedApt(apt)}>
+                    <div key={apt.id} className="apt-row" onClick={() => openApt(apt)}>
                       <div className="apt-row-left">
-                        <div style={{ width:8,height:8,borderRadius:"50%",background:STATUS_COLORS[apt.aptStatus]||"#888",flexShrink:0,marginTop:2 }} />
                         <div style={{ minWidth:0 }}>
-                          <div style={{ display:"flex",alignItems:"center",gap:6 }}>
-                            <div className="apt-row-name">{apt.name}</div>
-                            {hasInProgress && (
-                              <span title="Zadanie w trakcie" style={{ display:"inline-flex",alignItems:"center",background:"rgba(245,158,11,0.2)",color:"var(--yellow)",borderRadius:6,padding:"1px 6px",fontSize:9,fontWeight:700,letterSpacing:"0.06em",flexShrink:0 }}>
-                                ⚡ W TRAKCIE
-                              </span>
-                            )}
-                            {!hasInProgress && hasPending && (
-                              <span title="Oczekujące zadanie" style={{ display:"inline-flex",alignItems:"center",background:"rgba(239,68,68,0.15)",color:"var(--red)",borderRadius:6,padding:"1px 6px",fontSize:9,fontWeight:700,letterSpacing:"0.06em",flexShrink:0 }}>
-                                ● ZADANIE
-                              </span>
-                            )}
-                          </div>
+                          <div className="apt-row-name">{apt.name}</div>
                           <div style={{ display:"flex",gap:8,marginTop:3,flexWrap:"wrap" }}>
                             {apt.capacity > 0 && <span style={{ fontSize:10,color:"var(--text2)",fontWeight:600 }}>👥 {apt.capacity} os.</span>}
                           </div>
+                          {renderAptIndicators(apt)}
                         </div>
                       </div>
                       <div style={{ display:"flex",flexDirection:"column",alignItems:"flex-end",gap:3,flexShrink:0 }}>
@@ -7377,22 +7675,15 @@ export default function App() {
               ) : (
                 <div>
                   {filtered.map(apt => {
-                    const activeTasks = tasks.filter(t => t.apartmentId === apt.id && (t.status === "W trakcie" || t.status === "Nie rozpoczęto"));
-                    const hasInProgress = activeTasks.some(t => t.status === "W trakcie");
-                    const hasPending    = activeTasks.some(t => t.status === "Nie rozpoczęto");
                     return (
-                      <div key={apt.id} className="apt-row" onClick={() => setSelectedApt(apt)}>
+                      <div key={apt.id} className="apt-row" onClick={() => openApt(apt)}>
                         <div className="apt-row-left">
-                          <div style={{ width:8,height:8,borderRadius:"50%",background:STATUS_COLORS[apt.aptStatus]||"#888",flexShrink:0,marginTop:2 }} />
                           <div style={{ minWidth:0 }}>
-                            <div style={{ display:"flex",alignItems:"center",gap:6 }}>
-                              <div className="apt-row-name">{apt.name}</div>
-                              {hasInProgress && <span style={{ display:"inline-flex",alignItems:"center",background:"rgba(245,158,11,0.2)",color:"var(--yellow)",borderRadius:6,padding:"1px 6px",fontSize:9,fontWeight:700,letterSpacing:"0.06em",flexShrink:0 }}>⚡ W TRAKCIE</span>}
-                              {!hasInProgress && hasPending && <span style={{ display:"inline-flex",alignItems:"center",background:"rgba(239,68,68,0.15)",color:"var(--red)",borderRadius:6,padding:"1px 6px",fontSize:9,fontWeight:700,letterSpacing:"0.06em",flexShrink:0 }}>● ZADANIE</span>}
-                            </div>
+                            <div className="apt-row-name">{apt.name}</div>
                             <div style={{ display:"flex",gap:8,marginTop:3,flexWrap:"wrap" }}>
                               {apt.capacity > 0 && <span style={{ fontSize:10,color:"var(--text2)",fontWeight:600 }}>👥 {apt.capacity} os.</span>}
                             </div>
+                            {renderAptIndicators(apt)}
                           </div>
                         </div>
                         <div style={{ display:"flex",flexDirection:"column",alignItems:"flex-end",gap:3,flexShrink:0 }}>
