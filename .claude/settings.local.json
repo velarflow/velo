@@ -26,7 +26,16 @@
       "Bash(node test_smoke.mjs)",
       "PowerShell(Get-NetTCPConnection *)",
       "Bash(git add *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(echo \"=== exit: $? ===\")",
+      "Read(//c/Users/paawe/Documents/**)",
+      "Read(//c/Users/paawe/**)",
+      "Bash(node -e \"const p=require\\('./package.json'\\); console.log\\(JSON.stringify\\({type:p.type, deps:{...p.dependencies,...p.devDependencies}},null,1\\)\\)\")",
+      "Bash(git --no-pager diff --stat)",
+      "Bash(git --no-pager diff)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(awk '{$1=$1}1')",
+      "Bash(awk -F\"'\" '{print $2}')"
     ]
   }
 }

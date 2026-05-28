@@ -2295,6 +2295,8 @@ const Icon = ({ name, size = 20, color = "currentColor" }) => {
     tasks: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>,
     users: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
     back: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>,
+    "chevron-left": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>,
+    "chevron-right": <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>,
     plus: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>,
     minus: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>,
     edit: <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
@@ -2390,6 +2392,119 @@ const NumberInput = ({
   );
 };
 
+// ─── SCROLLABLE TABS (FIX 5.3) ─────────────────────────────────────────────────
+// Reużywalny wrapper poziomej listy zakładek: scroll kółkiem myszy → poziomy scroll,
+// plus strzałki ‹ › po bokach (pojawiają się tylko gdy jest co przewijać).
+// Dzieci (np. lista .tab) trafiają do scrollowanego kontenera; przekaż className="tabs"
+// aby zachować istniejący styl listy zakładek.
+const ScrollableTabs = ({ children, className = "" }) => {
+  const scrollRef = useRef(null);
+  const lastActiveKey = useRef("");
+  const [canLeft, setCanLeft] = useState(false);
+  const [canRight, setCanRight] = useState(false);
+
+  const updateArrows = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanLeft(el.scrollLeft > 4);
+    setCanRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 4);
+  }, []);
+
+  // Smooth horizontal scroll TYLKO kontenera (NIE window/sticky) — scrollTo zamiast
+  // scrollIntoView (scrollIntoView z block:"nearest" przy sticky parencie potrafi
+  // scrollować całą stronę). lastActiveKey blokuje powtórne wywołanie, gdy parent
+  // re-renderuje a active się nie zmieniło → brak szarpania.
+  const centerActive = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || el.scrollWidth <= el.clientWidth + 4) return;
+    const active = el.querySelector(".tab.active, .active");
+    if (!active) {
+      lastActiveKey.current = "";
+      return;
+    }
+    const key = active.textContent || "";
+    if (key === lastActiveKey.current) return;
+    lastActiveKey.current = key;
+    // rAF: pozwala React zakończyć reconciliation; smooth scroll nie konkuruje z layoutem.
+    requestAnimationFrame(() => {
+      const el2 = scrollRef.current;
+      if (!el2) return;
+      const active2 = el2.querySelector(".tab.active, .active");
+      if (!active2) return;
+      const elRect = el2.getBoundingClientRect();
+      const aRect  = active2.getBoundingClientRect();
+      const delta  = (aRect.left + aRect.width / 2) - (elRect.left + elRect.width / 2);
+      const max    = el2.scrollWidth - el2.clientWidth;
+      el2.scrollTo({ left: Math.max(0, Math.min(max, el2.scrollLeft + delta)), behavior: "smooth" });
+    });
+  }, []);
+
+  // Mount-only: listenery (NIE re-rejestrujemy ich na każdy render → brak race'ów ze smooth scrollem).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onWheel = (e) => {
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        el.scrollLeft += e.deltaY;
+        e.preventDefault();
+      }
+      updateArrows();
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("scroll", updateArrows);
+    window.addEventListener("resize", updateArrows);
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("scroll", updateArrows);
+      window.removeEventListener("resize", updateArrows);
+    };
+  }, [updateArrows]);
+
+  // Po każdym renderze sprawdź arrows + (jeśli active się zmieniło) wyśrodkuj.
+  useEffect(() => {
+    updateArrows();
+    centerActive();
+  });
+
+  const scrollBy = (dir) => {
+    const el = scrollRef.current;
+    if (el) el.scrollBy({ left: dir * 200, behavior: "smooth" });
+  };
+
+  return (
+    <div className="scrollable-tabs-wrap">
+      {canLeft && (
+        <button className="stabs-arrow stabs-arrow-left" onClick={() => scrollBy(-1)} aria-label="Przewiń w lewo">
+          <Icon name="chevron-left" size={18} />
+        </button>
+      )}
+      <div ref={scrollRef} className={`scrollable-tabs ${className}`}>
+        {children}
+      </div>
+      {canRight && (
+        <button className="stabs-arrow stabs-arrow-right" onClick={() => scrollBy(1)} aria-label="Przewiń w prawo">
+          <Icon name="chevron-right" size={18} />
+        </button>
+      )}
+    </div>
+  );
+};
+
+// ─── useMediaQuery (FIX: master-detail) ────────────────────────────────────────
+// Śledzi czy media query pasuje (np. szeroki ekran) — do decyzji split vs pełny ekran.
+const useMediaQuery = (q) => {
+  const [matches, setMatches] = useState(() => typeof window !== "undefined" && window.matchMedia(q).matches);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia(q);
+    const handler = (e) => setMatches(e.matches);
+    mq.addEventListener("change", handler);
+    setMatches(mq.matches);
+    return () => mq.removeEventListener("change", handler);
+  }, [q]);
+  return matches;
+};
+
 // ─── BRAND LOGO ──────────────────────────────────────────────────────────────
 // VelarFlow — monogram VF (rekonstrukcja z brand assets, do podmiany na oryginalny SVG od projektanta)
 // Użycie:
@@ -2468,9 +2583,9 @@ const styles = `
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
-    --bg: #0A1628;
-    --surface: #0F1E33;
-    --surface2: #152841;
+    --bg: #00040F;
+    --surface: #0B1220;
+    --surface2: #161D2A;
     --border: #1E2D47;
     --accent: #3B82F6;
     --accent2: #60A5FA;
@@ -2565,18 +2680,79 @@ const styles = `
     .sidebar-user { font-size: 12px; color: var(--text2); font-weight: 600; margin-bottom: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
     .app {
+      flex: 1;
+      min-width: 0;
       max-width: none;
       margin: 0 0 0 220px;
       min-height: 100vh;
       overflow: hidden;
     }
     .bottom-nav { display: none !important; }
-    .content { padding-bottom: 24px !important; max-width: 1200px; }
+    .content { padding-bottom: 24px !important; max-width: none; width: 100%; padding-left: 40px !important; padding-right: 40px !important; }
+    /* Desktop: kompaktowy nagłówek — bez 56px górnego paddingu z mobile (status bar) */
+    .header { padding: 14px 40px 12px !important; min-height: 0 !important; }
+    .header h1 { font-size: 20px !important; }
+    .header .icon-btn { width: 32px !important; height: 32px !important; }
+    .header-back { padding: 2px !important; }
+
+    /* ─── PASEK MENU U GÓRY (opcja w Ustawieniach → Ogólne) ─── */
+    .app-root.nav-top { flex-direction: column; }
+    .app-root.nav-top .sidebar {
+      flex-direction: row; align-items: center;
+      width: 100%; height: 56px; min-height: 56px;
+      top: 0; left: 0; right: 0; bottom: auto;
+      border-right: none; border-bottom: 1px solid var(--border);
+      padding: 0 12px;
+    }
+    .app-root.nav-top .sidebar-logo {
+      padding: 0 14px 0 4px; margin-right: 6px;
+      border-bottom: none; border-right: 1px solid var(--border);
+      align-self: stretch; display: flex; align-items: center; flex-shrink: 0;
+    }
+    .app-root.nav-top .sidebar-nav { flex: 1; min-width: 0; display: flex; align-items: center; padding: 0; }
+    .app-root.nav-top .sidebar-nav .scrollable-tabs-wrap { flex: 1; min-width: 0; }
+    .app-root.nav-top .sidebar-nav .scrollable-tabs { align-items: center; gap: 2px; }
+    .app-root.nav-top .sidebar-section { display: none; }
+    .app-root.nav-top .sidebar-item {
+      border-left: none; border-bottom: 2px solid transparent;
+      padding: 8px 12px; white-space: nowrap; flex-shrink: 0;
+    }
+    .app-root.nav-top .sidebar-item.active { border-bottom-color: var(--accent); background: transparent; }
+    .app-root.nav-top .sidebar-footer {
+      border-top: none; border-left: 1px solid var(--border);
+      padding: 0 4px 0 12px; margin-left: auto;
+      display: flex; align-items: center; gap: 8px; flex-shrink: 0; align-self: stretch;
+    }
+    .app-root.nav-top .sidebar-user { margin-bottom: 0; max-width: 150px; }
+    .app-root.nav-top .sidebar-footer button { width: auto !important; margin-bottom: 0 !important; white-space: nowrap; }
+    .app-root.nav-top .app { flex: 0 0 auto; margin: 56px 0 0 0; min-height: calc(100vh - 56px); }
+    /* sticky nagłówek treści przykleja się pod paskiem, nie pod nim */
+    .app-root.nav-top .header { top: 56px; padding: 10px 40px !important; min-height: 0 !important; }
+    .app-root.nav-top .header h1 { font-size: 18px !important; }
+    .app-root.nav-top .header .icon-btn { width: 30px !important; height: 30px !important; }
   }
 
-  @media (min-width: 1200px) {
-    .content { max-width: 1400px; }
+  /* ─── MASTER-DETAIL SPLIT (≥1280px): lista lewo / detal prawo ─── */
+  @media (min-width: 1280px) {
+    .md-split { display: flex; align-items: stretch; }
+    .md-master {
+      width: 400px; flex-shrink: 0;
+      border-right: 1px solid var(--border);
+      height: 100vh; overflow-y: auto;
+    }
+    .md-detail { flex: 1; min-width: 0; height: 100vh; overflow-y: auto; }
+    /* Wąski lewy panel: zawsze jedna kolumna + mniejszy padding (niezależnie od ustawienia aptColumns) */
+    .md-master .apt-list-grid { grid-template-columns: 1fr !important; }
+    .md-master .content,
+    .md-master .header { padding-left: 20px !important; padding-right: 20px !important; }
+    /* przy pasku u góry panele zaczynają się pod nim → odejmij jego wysokość */
+    .app-root.nav-top .md-master,
+    .app-root.nav-top .md-detail { height: calc(100vh - 56px); }
+    /* w panelach split sticky nagłówki przyklejają się do góry panelu (panel już jest pod paskiem) */
+    .app-root.nav-top .md-split .header { top: 0; }
   }
+  /* Podświetlenie aktywnej (otwartej w prawym panelu) pozycji listy */
+  .apt-row.active, .task-card.active, .owner-card.active { border-color: var(--accent); background: var(--surface2); }
 
   /* ─── LOGIN SCREEN ─── */
   .login-screen {
@@ -2734,16 +2910,20 @@ const styles = `
   .nav-item span { font-size: 9px; font-family: var(--font-display); font-weight: 400; letter-spacing: 0.12em; text-transform: uppercase; }
 
   /* ─── HEADER ─── */
+  /* Domyślnie kompaktowy nagłówek (był 56px górnego paddingu pod mobile status-bar — usunięte). */
   .header {
-    display: flex; align-items: center; gap: 12px;
-    padding: 56px 20px 16px;
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px;
     background: var(--bg);
     position: sticky; top: 0; z-index: 50;
     border-bottom: 1px solid var(--border);
   }
-  .header h1 { font-family: var(--font-display); font-size: 26px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; flex: 1; line-height: 1; color: var(--text); }
-  .header-back { background: none; border: none; color: var(--text); cursor: pointer; padding: 4px; }
-  .header-actions { display: flex; gap: 8px; }
+  /* FIX: margin: 0 — globalny h1 { margin: 32px 0 } z index.css powiększał pasek o 64px. */
+  .header h1 { font-family: var(--font-display); font-size: 18px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; flex: 1; line-height: 1; color: var(--text); margin: 0; }
+  .header h2, .detail-hero h1, .detail-hero h2 { margin: 0; }
+  .header-back { background: none; border: none; color: var(--text); cursor: pointer; padding: 2px; display: flex; align-items: center; }
+  .header-actions { display: flex; gap: 6px; align-items: center; }
+  .header .icon-btn { width: 30px; height: 30px; }
   .icon-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--text); width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
 
   .content { padding: 16px 16px 100px; }
@@ -2758,6 +2938,12 @@ const styles = `
   .badge-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
   .apt-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; cursor: pointer; transition: all 0.15s; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; }
+  /* FIX 5.2b: lista apartamentów wypełnia szerokość ekranu (kolumny zamiast pustej przestrzeni) */
+  .apt-list-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+  .apt-list-grid .apt-row { margin-bottom: 0; }
+  @media (min-width: 768px) {
+    .apt-list-grid { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
+  }
   .apt-row:hover { border-color: var(--accent); background: var(--surface2); }
   .apt-row-left { display: flex; align-items: center; gap: 10px; }
   .apt-row-name { font-family: var(--font-display); font-size: 18px; font-weight: 400; letter-spacing: 0.06em; }
@@ -2892,8 +3078,27 @@ const styles = `
   .slide-up { animation: slideUp 0.3s ease; }
 
   .tabs { display: flex; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
-  .tab { flex: 1; padding: 12px; text-align: center; font-family: var(--font-display); font-size: 16px; font-weight: 400; letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer; color: var(--text2); border-bottom: 2px solid transparent; transition: all 0.2s; }
-  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab { flex: 1; padding: 12px; text-align: center; font-family: var(--font-display); font-size: 16px; font-weight: 400; letter-spacing: 0.1em; text-transform: uppercase; cursor: pointer; color: var(--text2); border-bottom: 2px solid transparent; transition: all 0.15s ease; }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent); border-bottom: 2px solid var(--accent); font-weight: 600; background: rgba(59,130,246,0.1); }
+
+  /* ─── SCROLLABLE TABS (FIX 5.3) ─── */
+  .scrollable-tabs-wrap { position: relative; display: flex; align-items: center; }
+  .scrollable-tabs {
+    display: flex; flex-wrap: nowrap; overflow-x: auto; scroll-behavior: smooth;
+    scrollbar-width: none; /* Firefox */ width: 100%;
+  }
+  .scrollable-tabs::-webkit-scrollbar { display: none; } /* Chrome/Safari */
+  .stabs-arrow {
+    position: absolute; z-index: 5; top: 50%; transform: translateY(-50%);
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text); cursor: pointer; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  }
+  .stabs-arrow:hover { background: var(--accent); }
+  .stabs-arrow-left { left: 0; }
+  .stabs-arrow-right { right: 0; }
 
   .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
   .section-title { font-family: var(--font-body); font-size: 10px; font-weight: 700; color: var(--text2); letter-spacing: 0.12em; text-transform: uppercase; }
@@ -3052,6 +3257,28 @@ const TaskStatusBadge = ({ status }) => {
   return (
     <span className="badge" style={{ color, background: color + "18" }}>
       {status}
+    </span>
+  );
+};
+
+// FIX 9.3 — kafelek priorytetu (zastępuje brzydką kropkę/emoji w kartach zadań)
+const PRIORITY_CONFIG = {
+  high:   { label: "Wysoki",   color: "var(--red)",    bg: "rgba(239,68,68,0.12)", glyph: "!" },
+  normal: { label: "Normalny", color: "var(--yellow)", bg: "rgba(245,158,11,0.12)", glyph: "–" },
+  low:    { label: "Niski",    color: "var(--green)",  bg: "rgba(16,185,129,0.12)", glyph: "↓" },
+};
+const PriorityTile = ({ priority = "normal" }) => {
+  const c = PRIORITY_CONFIG[priority] || PRIORITY_CONFIG.normal;
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 5,
+      padding: "3px 9px", borderRadius: 8,
+      background: c.bg, color: c.color,
+      fontSize: 11, fontWeight: 700, letterSpacing: "0.04em",
+      borderLeft: `3px solid ${c.color}`, lineHeight: 1.2,
+    }}>
+      <span style={{ fontSize: 12, fontWeight: 800, lineHeight: 1 }}>{c.glyph}</span>
+      {c.label}
     </span>
   );
 };
@@ -3699,20 +3926,47 @@ const ApartmentForm = ({ apt, owners, onSave, onClose, onGoToSettings, defaultCa
   );
 };
 
-const TaskForm = ({ task, apartments, onSave, onClose }) => {
-  const { form, set, touch, submit, hasError } = useValidatedForm(task || {
-    apartmentId: (apartments[0] || {}).id || 1, title: "", assignedTo: WORKERS[0],
-    status: "Nie rozpoczęto", priority: "normal", notes: "", nextCheckout: "", nextCheckin: "", orderBy: "", location: ""
-  }, "task");
+const TaskForm = ({ task, apartments, onSave, onClose, onToast }) => {
+  // FIX 9.1 — zawsze startuj z kompletu defaultów; task (pełny lub prefill {apartmentId})
+  // tylko nadpisuje brakujące pola. Wcześniej task={apartmentId:X} powodowało, że
+  // assignedTo było undefined → V.required fail bez widocznego błędu.
+  const noWorkers = !WORKERS || WORKERS.length === 0;
+  const defaults = {
+    apartmentId: (apartments[0] || {}).id || 1,
+    title: "",
+    assignedTo: WORKERS[0] || "",
+    status: "Nie rozpoczęto",
+    priority: "normal",
+    notes: "", nextCheckout: "", nextCheckin: "", orderBy: "", location: "",
+  };
+  const initial = { ...defaults, ...(task || {}) };
+  const { form, set, touch, submit, hasError } = useValidatedForm(initial, "task");
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (saving) return;
+    if (noWorkers) {
+      onToast && onToast("⚠️ Brak zdefiniowanych pracowników — dodaj pracownika w ustawieniach", "warn");
+      return;
+    }
+    setSaving(true);
+    const ok = submit(onSave);
+    if (!ok) {
+      onToast && onToast("⚠️ Uzupełnij wymagane pola", "warn");
+      setSaving(false);
+    }
+    // przy ok: parent zamyka modal (unmount) → setSaving(false) nie potrzebne
+  };
 
   return (
-    <FloatingModal open onClose={onClose} title={task ? "Edytuj zadanie" : "Nowe zadanie"}>
+    <FloatingModal open onClose={onClose} title={task && task.id ? "Edytuj zadanie" : "Nowe zadanie"}>
         <div className="form-group">
           <label className="form-label">Apartament / Lokalizacja <span style={{color:"var(--red)"}}>*</span></label>
           <select className={`form-select ${hasError("apartmentId") ? "input-error" : ""}`}
             value={form.apartmentId} onChange={e => set("apartmentId", parseInt(e.target.value))}>
             {apartments.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
           </select>
+          <FieldError msg={hasError("apartmentId")} />
         </div>
         <div className="form-group">
           <label className="form-label">Tytuł zadania <span style={{color:"var(--red)"}}>*</span></label>
@@ -3737,16 +3991,23 @@ const TaskForm = ({ task, apartments, onSave, onClose }) => {
         </div>
         <div className="form-group">
           <label className="form-label">Przypisz do <span style={{color:"var(--red)"}}>*</span></label>
-          <select className="form-select" value={form.assignedTo} onChange={e => set("assignedTo", e.target.value)}>
-            {WORKERS.map(w => <option key={w}>{w}</option>)}
+          <select className={`form-select ${hasError("assignedTo") ? "input-error" : ""}`}
+            value={form.assignedTo} onChange={e => set("assignedTo", e.target.value)}>
+            {noWorkers
+              ? <option value="">— brak pracowników —</option>
+              : WORKERS.map(w => <option key={w}>{w}</option>)}
           </select>
+          <FieldError msg={hasError("assignedTo") || (noWorkers ? "Brak zdefiniowanych pracowników — dodaj w ustawieniach" : null)} />
         </div>
-        <div className="form-group">
-          <label className="form-label">Status</label>
-          <select className="form-select" value={form.status} onChange={e => set("status", e.target.value)}>
-            {Object.keys(TASK_STATUS_COLORS).map(s => <option key={s}>{s}</option>)}
-          </select>
-        </div>
+        {/* FIX 9.5 — Status edytowalny tylko przy edycji istniejącego zadania */}
+        {task && task.id && (
+          <div className="form-group">
+            <label className="form-label">Status</label>
+            <select className="form-select" value={form.status} onChange={e => set("status", e.target.value)}>
+              {Object.keys(TASK_STATUS_COLORS).map(s => <option key={s}>{s}</option>)}
+            </select>
+          </div>
+        )}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
           <div className="form-group"><label className="form-label">Wyjazd gości</label>
             <input className="form-input" type="datetime-local" value={form.nextCheckout} onChange={e => set("nextCheckout", e.target.value)} /></div>
@@ -3760,8 +4021,10 @@ const TaskForm = ({ task, apartments, onSave, onClose }) => {
           <FieldError msg={hasError("notes")} />
         </div>
         <div className="btn-row">
-          <button className="btn btn-ghost" onClick={onClose}>Anuluj</button>
-          <button className="btn btn-primary" onClick={() => submit(onSave)}>Zapisz</button>
+          <button className="btn btn-ghost" onClick={onClose} disabled={saving}>Anuluj</button>
+          <button className="btn btn-primary" onClick={handleSave} disabled={saving || noWorkers}>
+            {saving ? "Zapisywanie..." : "Zapisz"}
+          </button>
         </div>
     </FloatingModal>
   );
@@ -4094,17 +4357,34 @@ const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
     const list = Array.isArray(stored) ? stored : STANDARD_EQUIPMENT;
     return list.map(e => e.name);
   };
-  // FIX 3.B — nazwy aktualnie wypożyczone (aktywnie) z danego apartamentu = niedostępne.
-  const borrowedNamesFor = (aptId) => new Set(
+  // FIX 9.1b — ilości w apartamencie per nazwa (z fallbackiem qty=1 dla seed listy)
+  const equipQtyMapFor = (aptId) => {
+    const stored = Storage.get(`apt_equip_${aptId}`);
+    const list = Array.isArray(stored) ? stored : STANDARD_EQUIPMENT;
+    const m = new Map();
+    list.forEach(e => m.set(e.name, (m.get(e.name) || 0) + Number(e.qty != null ? e.qty : 1)));
+    return m;
+  };
+  // FIX 9.1b — sumaryczna ilość aktywnie wypożyczona z danego apartamentu per nazwa
+  const borrowedQtyMapFor = (aptId) => {
+    const m = new Map();
     loans.filter(l => l.status === "active" && l.fromAptId === Number(aptId))
-      .flatMap(l => (l.items || []).map(it => it.name))
-  );
-  // Pozycje do wyboru: jeśli wybrano „skąd" → tylko z tego apartamentu i tylko wolne;
+      .flatMap(l => (l.items || []))
+      .forEach(it => m.set(it.name, (m.get(it.name) || 0) + Number(it.qty || 0)));
+    return m;
+  };
+  const availableQtyFor = (aptId, name) => {
+    if (!aptId || !name) return 0;
+    const have = equipQtyMapFor(Number(aptId)).get(name) || 0;
+    const taken = borrowedQtyMapFor(Number(aptId)).get(name) || 0;
+    return Math.max(0, have - taken);
+  };
+  // Pozycje do wyboru: jeśli wybrano „skąd" → tylko z tego apartamentu i tylko z dostępną ilością > 0;
   // jeśli nie → pełna lista (suma wyposażenia wszystkich apartamentów).
   const itemOptions = (() => {
     if (form.fromAptId) {
-      const borrowed = borrowedNamesFor(form.fromAptId);
-      return equipNamesFor(Number(form.fromAptId)).filter(n => !borrowed.has(n));
+      return equipNamesFor(Number(form.fromAptId))
+        .filter(n => availableQtyFor(form.fromAptId, n) > 0);
     }
     const set = new Set();
     apartments.forEach(a => equipNamesFor(a.id).forEach(n => set.add(n)));
@@ -4134,10 +4414,14 @@ const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
     const haveNames = equipNamesFor(Number(form.fromAptId));
     const missing = items.filter(i => !haveNames.includes(i.name.trim()));
     if (missing.length) { setError(`Apartament źródłowy nie ma na wyposażeniu: ${missing.map(m => m.name).join(", ")}`); return; }
-    // FIX 3.B — nie można wypożyczyć pozycji, która jest już aktywnie wypożyczona z tego apartamentu
-    const borrowed = borrowedNamesFor(form.fromAptId);
-    const taken = items.filter(i => borrowed.has(i.name.trim()));
-    if (taken.length) { setError(`Już wypożyczone z apartamentu źródłowego: ${taken.map(t => t.name).join(", ")}`); return; }
+    // FIX 9.1b — walidacja: ilość ≤ dostępne (uwzględnia już wypożyczone sztuki)
+    for (const it of items) {
+      const name = it.name.trim();
+      const avail = availableQtyFor(form.fromAptId, name);
+      const q = Number(it.qty || 0);
+      if (q < 1) { setError(`Ilość '${name}' musi być ≥ 1`); return; }
+      if (q > avail) { setError(`Nie można pożyczyć ${q} szt. '${name}' — dostępne tylko ${avail} szt. w apartamencie`); return; }
+    }
 
     const entry = Loans.add({
       fromAptId: form.fromAptId,
@@ -4324,6 +4608,8 @@ const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
               )}
               {form.items.map((item, idx) => {
                 const opts = item.name && !itemOptions.includes(item.name) ? [item.name, ...itemOptions] : itemOptions;
+                // FIX 9.1b — max = dostępne sztuki w apartamencie źródłowym
+                const avail = form.fromAptId && item.name ? availableQtyFor(form.fromAptId, item.name) : null;
                 return (
                 <div key={idx} style={{ display:"flex", gap:6, marginBottom:6 }}>
                   <select
@@ -4333,13 +4619,17 @@ const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
                     onChange={e => updateItemLine(idx, { name: e.target.value })}
                   >
                     <option value="">{form.fromAptId ? "— wybierz pozycję —" : "— wybierz pozycję (dowolny apartament) —"}</option>
-                    {opts.map(n => <option key={n} value={n}>{n}</option>)}
+                    {opts.map(n => {
+                      const lbl = form.fromAptId ? `${n} (dostępne: ${availableQtyFor(form.fromAptId, n)})` : n;
+                      return <option key={n} value={n}>{lbl}</option>;
+                    })}
                   </select>
                   <NumberInput
                     className="form-input"
-                    style={{ width:70 }}
+                    style={{ width:80 }}
                     steppers={false}
                     min={1}
+                    max={avail || undefined}
                     value={item.qty}
                     onChange={v => updateItemLine(idx, { qty: v })}
                   />
@@ -4705,7 +4995,7 @@ const TemplateCard = ({ type, color, isEditing, template, isDefault, isManager, 
   );
 };
 
-const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onToggleTheme }) => {
+const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onToggleTheme, aptColumns, onSetAptColumns, navPos, onSetNavPos }) => {
   const isManager = currentUser && currentUser.role === ROLES.MANAGER;
   const [settingsTab, setSettingsTab] = useState("general"); // general | categories | equipment | sms
   const [settings, setSettings] = useState(() => Settings.getAll());
@@ -4931,7 +5221,7 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
       </div>
 
       {/* Zakładki ustawień */}
-      <div className="tabs" style={{ overflowX:"auto", flexWrap:"nowrap" }}>
+      <ScrollableTabs className="tabs">
         {[
           { id:"general",    label:"OGÓLNE" },
           { id:"categories", label:`KATEGORIE (${categories.length})` },
@@ -4945,7 +5235,7 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
             {t.label}
           </div>
         ))}
-      </div>
+      </ScrollableTabs>
 
       <div className="content">
 
@@ -4982,6 +5272,67 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
                     boxShadow:"0 1px 3px rgba(0,0,0,0.3)",
                   }} />
                 </button>
+              </div>
+            </div>
+
+            <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:12 }}>
+              Lista apartamentów
+            </div>
+            <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"var(--radius)", padding:16, marginBottom:24 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:14 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:14, fontWeight:600, marginBottom:4 }}>Układ listy</div>
+                  <div style={{ fontSize:12, color:"var(--text2)" }}>
+                    {aptColumns === "single"
+                      ? "Jedna kolumna — apartamenty jeden pod drugim."
+                      : "Wiele kolumn — wypełnia szerokość ekranu (im wyższa rozdzielczość, tym więcej kolumn)."}
+                  </div>
+                </div>
+                <div style={{ display:"flex", gap:6, flexShrink:0 }}>
+                  {[{ id:"multi", label:"Wiele" }, { id:"single", label:"Jedna" }].map(opt => (
+                    <button key={opt.id}
+                      onClick={() => onSetAptColumns(opt.id)}
+                      style={{
+                        padding:"8px 14px", borderRadius:10, fontSize:12, fontWeight:700, cursor:"pointer",
+                        border:"1px solid var(--border)", transition:"all 0.15s",
+                        background: aptColumns === opt.id ? "var(--accent)" : "var(--surface2)",
+                        color: aptColumns === opt.id ? "#000" : "var(--text2)",
+                      }}>
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:12 }}>
+              Pozycja menu
+            </div>
+            <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"var(--radius)", padding:16, marginBottom:24 }}>
+              <div style={{ display:"flex", alignItems:"center", gap:14 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:14, fontWeight:600, marginBottom:4 }}>Menu na desktopie</div>
+                  <div style={{ fontSize:12, color:"var(--text2)" }}>
+                    {navPos === "top"
+                      ? "Poziomy pasek u góry ekranu."
+                      : "Panel boczny po lewej stronie."}
+                    {" "}Na wąskim ekranie menu zawsze jest na dole.
+                  </div>
+                </div>
+                <div style={{ display:"flex", gap:6, flexShrink:0 }}>
+                  {[{ id:"left", label:"Po lewej" }, { id:"top", label:"U góry" }].map(opt => (
+                    <button key={opt.id}
+                      onClick={() => onSetNavPos(opt.id)}
+                      style={{
+                        padding:"8px 14px", borderRadius:10, fontSize:12, fontWeight:700, cursor:"pointer",
+                        border:"1px solid var(--border)", transition:"all 0.15s",
+                        background: navPos === opt.id ? "var(--accent)" : "var(--surface2)",
+                        color: navPos === opt.id ? "#000" : "var(--text2)",
+                      }}>
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -5896,10 +6247,39 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
   const removeLoanLine = (idx) => setLoanForm(f => ({ ...f, items: f.items.length > 1 ? f.items.filter((_, i) => i !== idx) : f.items }));
   const updateLoanLine = (idx, p) => setLoanForm(f => ({ ...f, items: f.items.map((l, i) => i === idx ? { ...l, ...p } : l) }));
   const [loanError, setLoanError] = useState("");
+  // FIX 9.1b — sumaryczna ilość wypożyczona aktywnie z tego apartamentu per pozycja
+  const borrowedOutQty = (() => {
+    const m = new Map();
+    (loans || [])
+      .filter(l => l.status === "active" && l.fromAptId === apt.id)
+      .flatMap(l => (l.items || []))
+      .forEach(it => m.set(it.name, (m.get(it.name) || 0) + Number(it.qty || 0)));
+    return m;
+  })();
+  // ilość w apartamencie per nazwa (suma — gdyby były duplikaty)
+  const equipQtyByName = (() => {
+    const m = new Map();
+    (equipment || []).forEach(e => m.set(e.name, (m.get(e.name) || 0) + Number(e.qty || 0)));
+    return m;
+  })();
+  const availableQtyFor = (name) => Math.max(0, (equipQtyByName.get(name) || 0) - (borrowedOutQty.get(name) || 0));
+  // FIX 9.1b — pokaż tylko pozycje, których jest jeszcze choć 1 sztuka dostępna
+  const availableEquip = [...equipQtyByName.entries()]
+    .map(([name]) => ({ name, available: availableQtyFor(name) }))
+    .filter(e => e.available > 0);
+  const availableEquipNames = availableEquip.map(e => e.name);
+
   const submitLoan = () => {
     if (!loanForm.toAptId) { setLoanError("Wybierz apartament docelowy"); return; }
     const items = loanForm.items.filter(i => i.name.trim());
     if (items.length === 0) { setLoanError("Dodaj przynajmniej jedną pozycję"); return; }
+    // FIX 9.1b — walidacja: ilość ≤ dostępne
+    for (const it of items) {
+      const avail = availableQtyFor(it.name);
+      const q = Number(it.qty || 0);
+      if (q < 1) { setLoanError(`Ilość '${it.name}' musi być ≥ 1`); return; }
+      if (q > avail) { setLoanError(`Nie można pożyczyć ${q} szt. '${it.name}' — dostępne tylko ${avail} szt. w apartamencie`); return; }
+    }
     const entry = Loans.add({ fromAptId: apt.id, toAptId: loanForm.toAptId, items, notes: loanForm.notes, createdBy: currentUser && currentUser.name || "" });
     if (!entry) { setLoanError("Nie udało się utworzyć"); return; }
     setShowLoanForm(false);
@@ -5907,15 +6287,6 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
     setLoanError("");
     onRefreshLoans && onRefreshLoans(); // Notify parent to refresh loans state
   };
-
-  // FIX 3.B — pozycje dostępne do pożyczenia z tego apartamentu = wyposażenie MINUS
-  // pozycje już aktywnie wypożyczone na zewnątrz (nie można wypożyczyć tego samego dwa razy).
-  const borrowedOutNames = new Set(
-    (loans || [])
-      .filter(l => l.status === "active" && l.fromAptId === apt.id)
-      .flatMap(l => (l.items || []).map(it => it.name))
-  );
-  const availableEquipNames = [...new Set((equipment || []).map(e => e.name))].filter(n => !borrowedOutNames.has(n));
 
   // FIX 3.C — oznaczanie zwrotu + usuwanie pożyczki z poziomu detalu
   const aptNameOf = (id) => ((apartments || []).find(a => a.id === id) || {}).name || "—";
@@ -6082,7 +6453,7 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
     <div className="slide-up">
       <div className="header">
         <button className="header-back" onClick={onBack}><Icon name="back" /></button>
-        <h1>{apt.name}</h1>
+        <h1>Informacje ogólne</h1>
         <div className="header-actions">
           {canEdit && <button className="icon-btn" onClick={onEdit}><Icon name="edit" size={16} /></button>}
         </div>
@@ -6103,15 +6474,15 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
         {canAddTask && <button className="action-btn primary" onClick={onAddTask}><Icon name="plus" size={18} color="#000" />ZADANIE</button>}
       </div>
 
-      {/* Tabs — scrollable */}
-      <div className="tabs" style={{ overflowX:"auto", flexWrap:"nowrap", WebkitOverflowScrolling:"touch" }}>
+      {/* Tabs — scrollable (FIX 5.3: kółko myszy + strzałki ‹ ›) */}
+      <ScrollableTabs className="tabs">
         {allTabs.map(t => (
           <div key={t.id} className={`tab ${tab === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}
             style={{ whiteSpace:"nowrap", flexShrink:0 }}>
             {t.label}
           </div>
         ))}
-      </div>
+      </ScrollableTabs>
 
       {/* ── INFO ── */}
       {tab === "info" && (() => {
@@ -6432,7 +6803,7 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
               />
               <button
                 className="btn btn-primary"
-                style={{ padding:"0 18px" }}
+                style={{ padding:"10px 20px", fontWeight:600 }}
                 disabled={!newItemName.equip.trim()}
                 onClick={() => addInventoryItem("equip")}
               >+ Dodaj</button>
@@ -6757,7 +7128,7 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
               <span style={{ fontSize:10, fontWeight:700, letterSpacing:"0.06em", padding:"2px 8px", borderRadius:20, background:"var(--surface2)", color:"var(--text2)" }}>{historyLoans.length} w historii</span>
             </div>
             {canEdit && !showLoanForm && (
-              <button className="btn btn-primary" style={{ padding:"6px 14px", fontSize:11 }} onClick={() => setShowLoanForm(true)}>
+              <button className="btn btn-primary" onClick={() => setShowLoanForm(true)}>
                 + Nowa pożyczka
               </button>
             )}
@@ -6788,13 +7159,15 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
                   <>
                     {loanForm.items.map((item, idx) => {
                       const opts = item.name && !availableEquipNames.includes(item.name) ? [item.name, ...availableEquipNames] : availableEquipNames;
+                      // FIX 9.1b — max ilość = dostępne w tym apartamencie
+                      const avail = item.name ? availableQtyFor(item.name) : null;
                       return (
                       <div key={idx} style={{ display:"flex", gap:6, marginBottom:6 }}>
                         <select className="form-select" style={{ flex:1 }} value={item.name} onChange={e => updateLoanLine(idx, { name: e.target.value })}>
                           <option value="">— wybierz pozycję —</option>
-                          {opts.map(n => <option key={n} value={n}>{n}</option>)}
+                          {opts.map(n => <option key={n} value={n}>{n} (dostępne: {availableQtyFor(n)})</option>)}
                         </select>
-                        <NumberInput className="form-input" style={{ width:60 }} steppers={false} min={1} value={item.qty} onChange={v => updateLoanLine(idx, { qty: v })} />
+                        <NumberInput className="form-input" style={{ width:70 }} steppers={false} min={1} max={avail || undefined} value={item.qty} onChange={v => updateLoanLine(idx, { qty: v })} />
                         {loanForm.items.length > 1 && <button onClick={() => removeLoanLine(idx)} style={{ background:"rgba(239,68,68,0.1)", border:"none", borderRadius:8, padding:"0 10px", color:"var(--red)", cursor:"pointer" }}>−</button>}
                       </div>
                       );
@@ -6943,11 +7316,14 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
             <div key={t.id} className="task-card" onClick={() => onSelectTask && onSelectTask(t)}>
               <div className="task-card-header">
                 <div style={{ flex:1 }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:6 }}>
+                    <PriorityTile priority={t.priority} />
+                    <TaskStatusBadge status={t.status} />
+                  </div>
                   <div className="task-title">{t.title}</div>
-                  <div style={{ marginTop:6 }}><TaskStatusBadge status={t.status} /></div>
                 </div>
                 <div style={{ display:"flex", flexDirection:"column", alignItems:"flex-end", gap:6 }}>
-                  <div className="avatar" style={{ width:28, height:28, fontSize:12 }}>{t.assignedTo[0]}</div>
+                  <div className="avatar" style={{ width:28, height:28, fontSize:12 }}>{t.assignedTo && t.assignedTo[0] || "?"}</div>
                   <span style={{ fontSize:10, color:"var(--text2)", fontWeight:600 }}>{t.assignedTo}</span>
                 </div>
               </div>
@@ -7092,20 +7468,23 @@ const TaskDetail = ({ task, apt, onBack, onEdit, onDelete, onComplete, onAccept,
 
   return (
     <div className="slide-up">
-      <div className="header">
-        <button className="header-back" onClick={onBack}><Icon name="back" /></button>
-        <h1>Szczegóły zadania</h1>
-        {isManager && (
-          <div className="header-actions">
-            <button className="icon-btn" onClick={onEdit}><Icon name="edit" size={16} /></button>
-            <button className="icon-btn" onClick={onDelete} style={{ color: "var(--red)" }}><Icon name="trash" size={16} color="var(--red)" /></button>
-          </div>
-        )}
-      </div>
+      {/* FIX 9.6 — jeden pasek (hero) z nazwą + statusem + akcjami (Edytuj/Wstecz). */}
       <div className="detail-hero">
-        {apt && <div style={{ fontSize: 11, color: "var(--accent)", fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 8 }}>{apt.name}</div>}
-        <div style={{ marginBottom: 8 }}><TaskStatusBadge status={task.status} /></div>
-        <h2>{task.title}</h2>
+        <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
+          <button className="icon-btn" onClick={onBack} title="Wstecz"><Icon name="back" size={16} /></button>
+          {apt && <div style={{ flex:1, fontSize: 11, color: "var(--accent)", fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase" }}>{apt.name}</div>}
+          {isManager && (
+            <>
+              <button className="icon-btn" onClick={onEdit} title="Edytuj"><Icon name="edit" size={16} /></button>
+              <button className="icon-btn" onClick={onDelete} title="Usuń" style={{ color: "var(--red)" }}><Icon name="trash" size={16} color="var(--red)" /></button>
+            </>
+          )}
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom: 8 }}>
+          <PriorityTile priority={task.priority} />
+          <TaskStatusBadge status={task.status} />
+        </div>
+        <h2 style={{ margin:0 }}>{task.title}</h2>
       </div>
       <div className="detail-section">
         <div className="detail-row"><span className="detail-label">Zlecono</span><span className="detail-value">{task.createdAt}</span></div>
@@ -7472,6 +7851,21 @@ export default function App() {
   }, [theme]);
   const toggleTheme = () => setTheme(t => t === "dark" ? "light" : "dark");
 
+  // ── Układ listy apartamentów: "multi" (wiele kolumn) | "single" (jedna) ─────
+  const [aptColumns, setAptColumns] = useState(() => Storage.get("aptColumns") || "multi");
+  useEffect(() => { Storage.set("aptColumns", aptColumns); }, [aptColumns]);
+
+  // ── Master-detail: split (lista lewo / detal prawo) tylko na szerokich ekranach ─
+  const isWide = useMediaQuery("(min-width: 1280px)");
+
+  // ── Pozycja menu na desktopie: "left" (panel boczny) | "top" (pasek u góry) ─────
+  // Wąski widok zawsze ma pasek na dole (niezależnie od tego ustawienia).
+  const [navPos, setNavPos] = useState(() => Storage.get("navPos") || "left");
+  useEffect(() => { Storage.set("navPos", navPos); }, [navPos]);
+  // Pasek u góry tylko gdy okno wystarczająco szerokie (ten sam próg co master-detail).
+  // Węższe okno → automatycznie panel boczny.
+  const navTop = navPos === "top" && isWide;
+
   const [tab, setTab] = useState("apartments");
   const [apartments, setApartments] = useState(MOCK_APARTMENTS);
   const [owners, setOwners] = useState(MOCK_OWNERS);
@@ -7539,6 +7933,7 @@ export default function App() {
   const [aptSearch, setAptSearch] = useState("");
   const [aptFilter, setAptFilter] = useState("Wszystkie");
   const [taskFilter, setTaskFilter] = useState("Wszystkie");
+  const [taskSearch, setTaskSearch] = useState(""); // FIX 9.4
   const [kwSyncing, setKwSyncing] = useState(false);
   const [showAudit, setShowAudit] = useState(false);
 
@@ -7800,9 +8195,16 @@ export default function App() {
     return matchSearch && matchChip && matchStatus && matchFloor && matchSea && matchCap && matchParking && matchSecType;
   });
 
-  const filteredTasks = tasks.filter(t =>
-    taskFilter === "Wszystkie" || t.status === taskFilter || t.assignedTo === taskFilter
-  );
+  // FIX 9.4 — filtr statusu + wyszukiwanie po tytule/notatkach/osobie/lokalizacji
+  const filteredTasks = (() => {
+    const q = taskSearch.trim().toLowerCase();
+    return tasks.filter(t => {
+      const matchStatus = taskFilter === "Wszystkie" || t.status === taskFilter;
+      const matchSearch = !q || [t.title, t.notes, t.assignedTo, t.location]
+        .some(v => (v || "").toLowerCase().includes(q));
+      return matchStatus && matchSearch;
+    });
+  })();
 
   // Unikalne wartości pięter i typów parkingu do dropdownów
   const uniqueFloors   = [...new Set(apartments.map(a => a.floor).filter(Boolean))].sort();
@@ -7893,7 +8295,7 @@ export default function App() {
               }}
             />
             {taskDeleteConfirm}
-            {showTaskForm && <TaskForm task={editingTask} apartments={apartments} onSave={saveTask} onClose={() => { setShowTaskForm(false); setEditingTask(null); }} />}
+            {showTaskForm && <TaskForm task={editingTask} apartments={apartments} onSave={saveTask} onToast={showToast} onClose={() => { setShowTaskForm(false); setEditingTask(null); }} />}
           </div>
         </div>
       );
@@ -7916,56 +8318,64 @@ export default function App() {
   // Kategorie z flagą showInNav są automatycznie dodawane do menu
   const categoriesInNav = categories.filter(c => c.showInNav);
 
-  const SidebarNav = () => (
+  // FIX: SidebarNav jako PLAIN JSX (nie funkcja-komponent), bo `const SidebarNav = () => {}`
+  // wewnątrz App tworzył NOWY typ komponentu przy każdym renderze → React unmount/mount
+  // → ScrollableTabs resetował scrollLeft do 0 → animacja edge tab zawsze szła „od początku listy".
+  const navItems = (
+    <>
+      <div
+        className={`sidebar-item ${tab === "apartments" && !selectedApt && !selectedTask && !selectedOwner ? "active" : ""}`}
+        onClick={() => { setTab("apartments"); setSelectedApt(null); setSelectedTask(null); setSelectedOwner(null); }}
+      >
+        <Icon name="home" size={18} />Wszystkie pozycje
+      </div>
+
+      {categoriesInNav.length > 0 && (
+        <>
+          <div className="sidebar-section" style={{ fontSize:9, fontWeight:700, letterSpacing:"0.12em", color:"var(--text2)", padding:"12px 20px 4px", textTransform:"uppercase", opacity:0.7 }}>
+            Kategorie
+          </div>
+          {categoriesInNav.map(cat => (
+            <div key={cat.id}
+              className={`sidebar-item ${tab === `cat_${cat.id}` ? "active" : ""}`}
+              onClick={() => { setTab(`cat_${cat.id}`); setSelectedApt(null); setSelectedTask(null); setSelectedOwner(null); }}
+              style={tab === `cat_${cat.id}` ? { borderLeftColor: cat.color, color: cat.color, background: `${cat.color}0a` } : {}}
+            >
+              <Icon name={cat.icon || "home"} size={18} color={tab === `cat_${cat.id}` ? cat.color : undefined} />{cat.name}
+            </div>
+          ))}
+        </>
+      )}
+
+      <div className="sidebar-section" style={{ fontSize:9, fontWeight:700, letterSpacing:"0.12em", color:"var(--text2)", padding:"12px 20px 4px", textTransform:"uppercase", opacity:0.7 }}>
+        Operacje
+      </div>
+      {[
+        { id:"cleaning",   icon:"check",    label:"Sprzątanie" },
+        { id:"tasks",      icon:"tasks",    label:"Zadania" },
+        { id:"loans",      icon:"swap",     label:"Pożyczki" },
+        { id:"files",      icon:"file",     label:"Pliki" },
+        { id:"owners",     icon:"users",    label:"Właściciele" },
+        { id:"kw",         icon:"building", label:"KW Hotel" },
+        { id:"settings",   icon:"settings", label:"Ustawienia" },
+      ].map(item => (
+        <div key={item.id}
+          className={`sidebar-item ${tab === item.id && !selectedApt && !selectedTask && !selectedOwner ? "active" : ""}`}
+          onClick={() => { setTab(item.id); setSelectedApt(null); setSelectedTask(null); setSelectedOwner(null); }}>
+          <Icon name={item.icon} size={18} />{item.label}
+        </div>
+      ))}
+    </>
+  );
+  const sidebarNav = (
     <nav className="sidebar">
       <div className="sidebar-logo">
-        <VelarLogo size={28} withWordmark taglineText="Property Suite" />
+        <VelarLogo size={navTop ? 26 : 28} withWordmark taglineText={navTop ? null : "Property Suite"} />
       </div>
       <div className="sidebar-nav">
-        {/* Wszystkie pozycje */}
-        <div
-          className={`sidebar-item ${tab === "apartments" && !selectedApt && !selectedTask && !selectedOwner ? "active" : ""}`}
-          onClick={() => { setTab("apartments"); setSelectedApt(null); setSelectedTask(null); setSelectedOwner(null); }}
-        >
-          <Icon name="home" size={18} />Wszystkie pozycje
-        </div>
-
-        {/* Dynamiczne kategorie */}
-        {categoriesInNav.length > 0 && (
-          <>
-            <div style={{ fontSize:9, fontWeight:700, letterSpacing:"0.12em", color:"var(--text2)", padding:"12px 20px 4px", textTransform:"uppercase", opacity:0.7 }}>
-              Kategorie
-            </div>
-            {categoriesInNav.map(cat => (
-              <div key={cat.id}
-                className={`sidebar-item ${tab === `cat_${cat.id}` ? "active" : ""}`}
-                onClick={() => { setTab(`cat_${cat.id}`); setSelectedApt(null); setSelectedTask(null); setSelectedOwner(null); }}
-                style={tab === `cat_${cat.id}` ? { borderLeftColor: cat.color, color: cat.color, background: `${cat.color}0a` } : {}}
-              >
-                <Icon name={cat.icon || "home"} size={18} color={tab === `cat_${cat.id}` ? cat.color : undefined} />{cat.name}
-              </div>
-            ))}
-          </>
-        )}
-
-        <div style={{ fontSize:9, fontWeight:700, letterSpacing:"0.12em", color:"var(--text2)", padding:"12px 20px 4px", textTransform:"uppercase", opacity:0.7 }}>
-          Operacje
-        </div>
-        {[
-          { id:"cleaning",   icon:"check",    label:"Sprzątanie" },
-          { id:"tasks",      icon:"tasks",    label:"Zadania" },
-          { id:"loans",      icon:"swap",     label:"Pożyczki" },
-          { id:"files",      icon:"file",     label:"Pliki" },
-          { id:"owners",     icon:"users",    label:"Właściciele" },
-          { id:"kw",         icon:"building", label:"KW Hotel" },
-          { id:"settings",   icon:"settings", label:"Ustawienia" },
-        ].map(item => (
-          <div key={item.id}
-            className={`sidebar-item ${tab === item.id && !selectedApt && !selectedTask && !selectedOwner ? "active" : ""}`}
-            onClick={() => { setTab(item.id); setSelectedApt(null); setSelectedTask(null); setSelectedOwner(null); }}>
-            <Icon name={item.icon} size={18} />{item.label}
-          </div>
-        ))}
+        {navTop
+          ? <ScrollableTabs className="sidebar-nav-scroll">{navItems}</ScrollableTabs>
+          : navItems}
       </div>
       <div className="sidebar-footer">
         <div className="sidebar-user">{currentUser.name} · {roleLabel}</div>
@@ -7984,86 +8394,90 @@ export default function App() {
   // ── Manager routing — selectedTask PRZED selectedApt ─────────────────────
   const sp = { online, queueSize, toast, toastColors, showAudit, onCloseAudit: () => setShowAudit(false) };
 
-  if (selectedTask) {
-    const apt = apartments.find(a => a.id === selectedTask.apartmentId);
-    return (
-      <div className="app-root">
-        <SidebarNav />
-        <Shell {...sp}>
-          <TaskDetail task={selectedTask} apt={apt} currentUser={currentUser}
-            onBack={() => setSelectedTask(null)}
-            onEdit={() => { setEditingTask(selectedTask); setShowTaskForm(true); }}
-            onDelete={() => deleteTask(selectedTask.id)}
-            onComplete={(id, protocol) => {
-              const updates = {
-                status: "Zrobione",
-                completionExecutor: protocol.executor || "",
-                completionNotes: protocol.notes || "",
-                completedAt: protocol.date || new Date().toISOString().slice(0,10),
-                completionTime: protocol.timeSpent || "",
-                completionMaterials: protocol.materials || "",
-                completionCost: protocol.costNet || "",
-                completionPhotos: protocol.photoLinks || "",
-              };
-              setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
-              setSelectedTask(prev => prev && prev.id === id ? { ...prev, ...updates } : prev);
-            }}
-            onAccept={(id, person) => {
-              const updates = { status: "W trakcie", acceptedBy: person, acceptedAt: new Date().toISOString() };
-              setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
-              setSelectedTask(prev => prev && prev.id === id ? { ...prev, ...updates } : prev);
-            }}
-          />
-          {taskDeleteConfirm}
-          {showTaskForm && <TaskForm task={editingTask} apartments={apartments} onSave={saveTask} onClose={() => { setShowTaskForm(false); setEditingTask(null); }} />}
-        </Shell>
-      </div>
-    );
-  }
+  // Detal aktualnie zaznaczonej encji (priorytet: zadanie > apartament > właściciel).
+  const detailNode = (() => {
+    if (selectedTask) {
+      const apt = apartments.find(a => a.id === selectedTask.apartmentId);
+      return (
+        <TaskDetail task={selectedTask} apt={apt} currentUser={currentUser}
+          onBack={() => setSelectedTask(null)}
+          onEdit={() => { setEditingTask(selectedTask); setShowTaskForm(true); }}
+          onDelete={() => deleteTask(selectedTask.id)}
+          onComplete={(id, protocol) => {
+            const updates = {
+              status: "Zrobione",
+              completionExecutor: protocol.executor || "",
+              completionNotes: protocol.notes || "",
+              completedAt: protocol.date || new Date().toISOString().slice(0,10),
+              completionTime: protocol.timeSpent || "",
+              completionMaterials: protocol.materials || "",
+              completionCost: protocol.costNet || "",
+              completionPhotos: protocol.photoLinks || "",
+            };
+            setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+            setSelectedTask(prev => prev && prev.id === id ? { ...prev, ...updates } : prev);
+          }}
+          onAccept={(id, person) => {
+            const updates = { status: "W trakcie", acceptedBy: person, acceptedAt: new Date().toISOString() };
+            setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+            setSelectedTask(prev => prev && prev.id === id ? { ...prev, ...updates } : prev);
+          }}
+        />
+      );
+    }
+    if (selectedApt) {
+      const owner = owners.find(o => o.id === selectedApt.ownerId);
+      return (
+        <ApartmentDetail apt={selectedApt} owner={owner} tasks={tasks} cleaningSessions={cleaningSessions} loans={loans} apartments={apartments} files={files} currentUser={currentUser} initialTab={aptInitialTab}
+          onBack={() => { setSelectedApt(null); setAptInitialTab(null); }}
+          onEdit={() => { setEditingApt(selectedApt); setShowAptForm(true); }}
+          onAddTask={() => { setPrefillApt(selectedApt.id); setShowTaskForm(true); }}
+          onSelectTask={(task) => setSelectedTask(task)}
+          onRefreshLoans={refreshLoans}
+          onRefreshFiles={refreshFiles}
+        />
+      );
+    }
+    if (selectedOwner) {
+      return (
+        <OwnerDetail owner={selectedOwner} apartments={apartments} currentUser={currentUser}
+          onBack={() => setSelectedOwner(null)}
+          onEdit={() => { setEditingOwner(selectedOwner); setShowOwnerForm(true); }}
+          onSelectApt={(apt) => openApt(apt)}
+          renderAptIndicators={renderAptIndicators}
+        />
+      );
+    }
+    return null;
+  })();
 
-  if (selectedApt) {
-    const owner = owners.find(o => o.id === selectedApt.ownerId);
-    return (
-      <div className="app-root">
-        <SidebarNav />
-        <Shell {...sp}>
-          <ApartmentDetail apt={selectedApt} owner={owner} tasks={tasks} cleaningSessions={cleaningSessions} loans={loans} apartments={apartments} files={files} currentUser={currentUser} initialTab={aptInitialTab}
-            onBack={() => { setSelectedApt(null); setAptInitialTab(null); }}
-            onEdit={() => { setEditingApt(selectedApt); setShowAptForm(true); }}
-            onAddTask={() => { setPrefillApt(selectedApt.id); setShowTaskForm(true); }}
-            onSelectTask={(task) => setSelectedTask(task)}
-            onRefreshLoans={refreshLoans}
-            onRefreshFiles={refreshFiles}
-          />
-          {showAptForm && <ApartmentForm apt={editingApt} owners={owners} defaultCategory={defaultCategory} onSave={f => { saveApt(f); setSelectedApt(a => ({ ...a, ...f })); }} onClose={() => { setShowAptForm(false); setEditingApt(null); }} onGoToSettings={() => { setShowAptForm(false); setTab("settings"); }} />}
-          {showTaskForm && <TaskForm task={editingTask || (prefillApt ? { apartmentId: prefillApt } : null)} apartments={apartments} onSave={saveTask} onClose={() => { setShowTaskForm(false); setEditingTask(null); setPrefillApt(null); }} />}
-        </Shell>
-      </div>
-    );
-  }
+  // Modale (apartament / zadanie / właściciel) — renderowane RAZ, działają w obu trybach
+  // (pełny ekran i split). onSave aktualizuje też zaznaczoną encję jeśli jest otwarta.
+  const modals = (
+    <>
+      {taskDeleteConfirm}
+      {showAptForm && <ApartmentForm apt={editingApt} owners={owners} defaultCategory={defaultCategory} onSave={f => { saveApt(f); if (selectedApt) setSelectedApt(a => ({ ...a, ...f })); }} onClose={() => { setShowAptForm(false); setEditingApt(null); }} onGoToSettings={() => { setShowAptForm(false); setTab("settings"); }} />}
+      {showTaskForm && <TaskForm task={editingTask || (prefillApt ? { apartmentId: prefillApt } : null)} apartments={apartments} onSave={saveTask} onToast={showToast} onClose={() => { setShowTaskForm(false); setEditingTask(null); setPrefillApt(null); }} />}
+      {showOwnerForm && <OwnerForm owner={editingOwner} onSave={o => { saveOwner(o); if (selectedOwner) setSelectedOwner(prev => ({ ...prev, ...o })); }} onClose={() => { setShowOwnerForm(false); setEditingOwner(null); }} />}
+    </>
+  );
 
-  if (selectedOwner) {
+  // Wąski ekran (< 1280px): detal na pełnym ekranie z przyciskiem „wstecz" (jak dotąd).
+  if (detailNode && !isWide) {
     return (
-      <div className="app-root">
-        <SidebarNav />
+      <div className={`app-root ${navTop ? "nav-top" : ""}`}>
+        {sidebarNav}
         <Shell {...sp}>
-          <OwnerDetail owner={selectedOwner} apartments={apartments} currentUser={currentUser}
-            onBack={() => setSelectedOwner(null)}
-            onEdit={() => { setEditingOwner(selectedOwner); setShowOwnerForm(true); }}
-            onSelectApt={(apt) => openApt(apt)}
-            renderAptIndicators={renderAptIndicators}
-          />
-          {showOwnerForm && <OwnerForm owner={editingOwner} onSave={o => { saveOwner(o); setSelectedOwner(prev => ({ ...prev, ...o })); }} onClose={() => { setShowOwnerForm(false); setEditingOwner(null); }} />}
+          {detailNode}
+          {modals}
         </Shell>
       </div>
     );
   }
 
   // ── Main navigation ────────────────────────────────────────────────────────
-  return (
-    <div className="app-root">
-      <SidebarNav />
-      <Shell {...sp}>
+  const tabContent = (
+    <>
       {tab === "apartments" && (
         <>
           <div className="header">
@@ -8195,9 +8609,9 @@ export default function App() {
             <div>
               {filteredApts.length === 0
                 ? <div className="empty"><h3>Brak wyników</h3><p style={{ fontSize:13,color:"var(--text2)",marginTop:6 }}>Zmień kryteria wyszukiwania</p></div>
-                : filteredApts.map(apt => {
+                : <div className="apt-list-grid" style={aptColumns === "single" ? { gridTemplateColumns:"1fr" } : undefined}>{filteredApts.map(apt => {
                   return (
-                    <div key={apt.id} className="apt-row" onClick={() => openApt(apt)}>
+                    <div key={apt.id} className={`apt-row ${selectedApt && selectedApt.id === apt.id ? "active" : ""}`} onClick={() => openApt(apt)}>
                       <div className="apt-row-left">
                         <div style={{ minWidth:0 }}>
                           <div style={{ display:"flex",alignItems:"center",gap:8,flexWrap:"wrap" }}>
@@ -8213,13 +8627,12 @@ export default function App() {
                       </div>
                     </div>
                   );
-                })}
+                })}</div>}
             </div>
           </div>
           {!isReadOnly && <button className="fab" onClick={() => { setEditingApt(null); setDefaultCategory(""); setShowAptForm(true); }}>
             <Icon name="plus" size={22} color="#000" />
           </button>}
-          {showAptForm && <ApartmentForm apt={editingApt} owners={owners} defaultCategory={defaultCategory} onSave={saveApt} onClose={() => { setShowAptForm(false); setEditingApt(null); }} onGoToSettings={() => { setShowAptForm(false); setTab("settings"); }} />}
         </>
       )}
 
@@ -8243,6 +8656,10 @@ export default function App() {
           onCategoriesChange={refreshCategories}
           theme={theme}
           onToggleTheme={toggleTheme}
+          aptColumns={aptColumns}
+          onSetAptColumns={setAptColumns}
+          navPos={navPos}
+          onSetNavPos={setNavPos}
         />
       )}
 
@@ -8318,7 +8735,7 @@ export default function App() {
                 <div>
                   {filtered.map(apt => {
                     return (
-                      <div key={apt.id} className="apt-row" onClick={() => openApt(apt)}>
+                      <div key={apt.id} className={`apt-row ${selectedApt && selectedApt.id === apt.id ? "active" : ""}`} onClick={() => openApt(apt)}>
                         <div className="apt-row-left">
                           <div style={{ minWidth:0 }}>
                             <div style={{ display:"flex",alignItems:"center",gap:8,flexWrap:"wrap" }}>
@@ -8340,10 +8757,6 @@ export default function App() {
           </>
         );
       })()}
-      {tab.startsWith("cat_") && showAptForm && (
-        <ApartmentForm apt={editingApt} owners={owners} defaultCategory={defaultCategory} onSave={saveApt} onClose={() => { setShowAptForm(false); setEditingApt(null); }} onGoToSettings={() => { setShowAptForm(false); setTab("settings"); }} />
-      )}
-
       {tab === "tasks" && (
         <>
           <div className="header">
@@ -8353,8 +8766,16 @@ export default function App() {
             </div>
           </div>
           <div className="content">
+            {/* FIX 9.4 — wyszukiwanie zadań */}
+            <input
+              className="form-input"
+              placeholder="🔍 Szukaj zadań (tytuł, notatki, osoba)..."
+              value={taskSearch}
+              onChange={e => setTaskSearch(e.target.value)}
+              style={{ marginBottom: 12 }}
+            />
             <div className="filter-row">
-              {["Wszystkie","Nie rozpoczęto","W trakcie","Zrobione",...WORKERS.slice(0,5)].map(f => (
+              {["Wszystkie","Nie rozpoczęto","W trakcie","Zrobione"].map(f => (
                 <div key={f} className={`filter-chip ${taskFilter === f ? "active" : ""}`} onClick={() => setTaskFilter(f)}>{f}</div>
               ))}
             </div>
@@ -8366,16 +8787,19 @@ export default function App() {
               : filteredTasks.map(task => {
                 const apt = apartments.find(a => a.id === task.apartmentId);
                 return (
-                  <div key={task.id} className="task-card" onClick={() => setSelectedTask(task)}>
+                  <div key={task.id} className={`task-card ${selectedTask && selectedTask.id === task.id ? "active" : ""}`} onClick={() => setSelectedTask(task)}>
                     <div className="task-card-header">
-                      <div style={{ flex:1 }}>
+                      <div style={{ flex:1, minWidth:0 }}>
                         {apt && <div className="task-apt">{apt.name}</div>}
-                        <div className="task-title">{task.priority==="high" && <span style={{color:"var(--red)",marginRight:6}}>🔴</span>}{task.priority==="low" && <span style={{color:"var(--green)",marginRight:6}}>🟢</span>}{task.title}</div>
+                        <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", margin:"4px 0 6px" }}>
+                          <PriorityTile priority={task.priority} />
+                          <TaskStatusBadge status={task.status} />
+                        </div>
+                        <div className="task-title">{task.title}</div>
                       </div>
-                      <TaskStatusBadge status={task.status} />
                     </div>
                     <div className="task-meta">
-                      <div className="task-assignee"><div className="avatar">{task.assignedTo[0]}</div>{task.assignedTo}</div>
+                      <div className="task-assignee"><div className="avatar">{task.assignedTo && task.assignedTo[0] || "?"}</div>{task.assignedTo}</div>
                       <span style={{ fontSize:11,color:"var(--text2)" }}>{task.createdAt}</span>
                       {task.nextCheckout && (
                         <span style={{ fontSize:11,color:"var(--green)",display:"flex",alignItems:"center",gap:4 }}>
@@ -8390,7 +8814,6 @@ export default function App() {
           {!isReadOnly && <button className="fab" onClick={() => { setEditingTask(null); setShowTaskForm(true); }}>
             <Icon name="plus" size={22} color="#000" />
           </button>}
-          {showTaskForm && <TaskForm task={editingTask||(prefillApt?{apartmentId:prefillApt}:null)} apartments={apartments} onSave={saveTask} onClose={() => { setShowTaskForm(false); setEditingTask(null); setPrefillApt(null); }} />}
         </>
       )}
 
@@ -8407,7 +8830,7 @@ export default function App() {
               const ownerApts = apartments.filter(a => a.ownerId === owner.id);
               const expanded = expandedOwnerId === owner.id;
               return (
-                <div key={owner.id} className="owner-card" onClick={() => setSelectedOwner(owner)}>
+                <div key={owner.id} className={`owner-card ${selectedOwner && selectedOwner.id === owner.id ? "active" : ""}`} onClick={() => setSelectedOwner(owner)}>
                   <div className="owner-header">
                     <button type="button" className="owner-count-tile"
                       title={expanded ? "Ukryj pozycje" : "Pokaż przypisane pozycje"}
@@ -8446,7 +8869,6 @@ export default function App() {
           {!isReadOnly && <button className="fab" onClick={() => { setEditingOwner(null); setShowOwnerForm(true); }}>
             <Icon name="plus" size={22} color="#000" />
           </button>}
-          {showOwnerForm && <OwnerForm owner={editingOwner} onSave={saveOwner} onClose={() => { setShowOwnerForm(false); setEditingOwner(null); }} />}
         </>
       )}
 
@@ -8524,7 +8946,21 @@ export default function App() {
           <Icon name="info" size={20} /><span>Więcej</span>
         </button>
       </nav>
-    </Shell>
+    </>
+  );
+
+  return (
+    <div className={`app-root ${navTop ? "nav-top" : ""}`}>
+      {sidebarNav}
+      <Shell {...sp}>
+        {detailNode && isWide ? (
+          <div className="md-split">
+            <div className="md-master">{tabContent}</div>
+            <div className="md-detail">{detailNode}</div>
+          </div>
+        ) : tabContent}
+        {modals}
+      </Shell>
     </div>
   );
 }
