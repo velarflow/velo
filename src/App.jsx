@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, createContext, useContext } from "react";
 
 // ════════════════════════════════════════════════════════════════════════════
 // § BUILD-TIME FLAG — wycina dane DEMO z bundla produkcyjnego (MUST FIX #3)
@@ -2676,6 +2676,31 @@ const styles = `
     }
     .sidebar-item:hover { color: var(--text); background: rgba(255,255,255,0.04); }
     .sidebar-item.active { color: var(--accent); border-left-color: var(--accent); background: rgba(59,130,246,0.06); }
+    .sidebar-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nav-badge {
+      margin-left: auto;
+      background: rgba(192,132,252,0.18);
+      color: var(--accent);
+      font-size: 11px; font-weight: 700;
+      padding: 2px 8px; border-radius: 10px;
+      min-width: 22px; text-align: center;
+      flex-shrink: 0;
+    }
+    .sidebar-item.active .nav-badge { background: rgba(255,255,255,0.18); color: inherit; }
+    .sidebar-section-toggle {
+      display: flex; align-items: center; gap: 6px;
+      width: 100%; background: none; border: 0; cursor: pointer;
+      font-family: inherit; text-align: left;
+      font-size: 9px; font-weight: 700; letter-spacing: 0.12em;
+      color: var(--text2); opacity: 0.7;
+      padding: 12px 20px 4px; text-transform: uppercase;
+    }
+    .sidebar-section-toggle:hover { opacity: 1; color: var(--text); }
+    .sidebar-section-toggle .nav-arrow { font-size: 10px; opacity: 0.8; }
+    .sidebar-expand-btn { background: transparent; border: 0; color: inherit; cursor: pointer; padding: 2px 6px; font-size: 12px; flex-shrink: 0; }
+    .sidebar-expand-btn:hover { color: var(--accent); }
+    .sidebar-subitem { padding-left: 44px !important; font-size: 12px; }
+    .app-root.nav-top .sidebar-subitem { display: none; }
     .sidebar-footer { padding: 16px 20px; border-top: 1px solid var(--border); }
     .sidebar-user { font-size: 12px; color: var(--text2); font-weight: 600; margin-bottom: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -5002,9 +5027,17 @@ const TemplateCard = ({ type, color, isEditing, template, isDefault, isManager, 
   );
 };
 
-const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onToggleTheme, aptColumns, onSetAptColumns, navPos, onSetNavPos }) => {
+const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onToggleTheme, aptColumns, onSetAptColumns, navPos, onSetNavPos, initialTab, initialTabBump }) => {
   const isManager = currentUser && currentUser.role === ROLES.MANAGER;
-  const [settingsTab, setSettingsTab] = useState("general"); // general | categories | equipment | sms
+  const [settingsTab, setSettingsTab] = useState(initialTab || "general"); // general | categories | equipment | sms
+  // PAKIET 7.5 — deep-link z submenu nawigacji. initialTabBump rośnie przy każdym kliknięciu submenu,
+  // więc nawet ten sam initialTab przeładuje zakładkę (klik "Ogólne" → "Kategorie" → "Ogólne" działa).
+  // Wzorzec "set state during render po zmianie propsa" — patrz react.dev/reference/react/useState#storing-information-from-previous-renders.
+  const [appliedBump, setAppliedBump] = useState(initialTabBump);
+  if (initialTabBump !== appliedBump) {
+    setAppliedBump(initialTabBump);
+    if (initialTab) setSettingsTab(initialTab);
+  }
   const [settings, setSettings] = useState(() => Settings.getAll());
   const [editingType, setEditingType] = useState(null);
   const [draft, setDraft] = useState("");
@@ -8121,6 +8154,52 @@ export default function App() {
   const [selectedOwner, setSelectedOwner] = useState(null);
   const [expandedOwnerId, setExpandedOwnerId] = useState(null); // rozwinięta lista pozycji właściciela (klik w kafelek)
 
+  // ── PAKIET 7 — nawigacja: zwijanie grup, submenu Ustawień, deep-link do zakładki ──
+  const [navCollapsed, setNavCollapsed] = useState(() => {
+    try { return Storage.get("nav_collapsed") || {}; } catch { return {}; }
+  });
+  const toggleNavGroup = (key) => {
+    setNavCollapsed(prev => {
+      const next = { ...prev, [key]: !prev[key] };
+      Storage.set("nav_collapsed", next);
+      return next;
+    });
+  };
+  const [settingsExpanded, setSettingsExpanded] = useState(() => {
+    try { return Storage.get("nav_settings_expanded") || false; } catch { return false; }
+  });
+  const toggleSettingsExpanded = () => {
+    setSettingsExpanded(v => { const nv = !v; Storage.set("nav_settings_expanded", nv); return nv; });
+  };
+  // Deep-link do konkretnej zakładki w SettingsView; bump licznik wymusza re-aplikację
+  // tej samej zakładki po ponownym kliknięciu (np. user wszedł w "Ogólne", potem klik "Ogólne" → nadal działa).
+  const [settingsInitialTab, setSettingsInitialTab] = useState(null);
+  const [settingsTabBump, setSettingsTabBump] = useState(0);
+  const goToSettingsTab = (tabId) => {
+    setSettingsInitialTab(tabId);
+    setSettingsTabBump(b => b + 1);
+    setTab("settings"); setSelectedApt(null); setSelectedTask(null); setSelectedOwner(null);
+  };
+
+  // PAKIET 7.2 — liczniki w nawigacji (memo, żeby nie liczyć przy każdym renderze).
+  // Hooki MUSZĄ być nad early-returnami dla roli (CLEANING/MAINTENANCE niżej).
+  const taskCount = useMemo(
+    () => tasks.filter(t => t.status === "Nie rozpoczęto" || t.status === "W trakcie").length,
+    [tasks]
+  );
+  const loanCount = useMemo(
+    () => (loans || []).filter(l => l.status === "active").length,
+    [loans]
+  );
+  // Apartament przypisany do kategorii przez a.status === cat.name (patrz tab "cat_…").
+  const categoryCounts = useMemo(() => {
+    const counts = {};
+    apartments.forEach(a => {
+      if (a.status) counts[a.status] = (counts[a.status] || 0) + 1;
+    });
+    return counts;
+  }, [apartments]);
+
   const [showAptForm, setShowAptForm] = useState(false);
   const [showTaskForm, setShowTaskForm] = useState(false);
   const [showOwnerForm, setShowOwnerForm] = useState(false);
@@ -8519,6 +8598,41 @@ export default function App() {
   // Kategorie z flagą showInNav są automatycznie dodawane do menu
   const categoriesInNav = categories.filter(c => c.showInNav);
 
+  // PAKIET 7.5 — submenu Ustawień (zakładki SettingsView)
+  const settingsSubItems = [
+    { id: "general",     label: "Ogólne" },
+    { id: "categories",  label: "Kategorie" },
+    { id: "equipment",   label: "Wyposażenie" },
+    { id: "team",        label: "Zespół" },
+    { id: "formbuilder", label: "Formularz" },
+    { id: "sms",         label: "Szablony SMS" },
+  ];
+
+  // PAKIET 7.4 — wydzielona grupa "Pozostałe" z "Operacji"
+  const operationsItems = [
+    { id:"cleaning", icon:"check", label:"Sprzątanie" },
+    { id:"tasks",    icon:"tasks", label:"Zadania",  count: taskCount },
+    { id:"loans",    icon:"swap",  label:"Pożyczki", count: loanCount },
+  ];
+  const otherItems = [
+    { id:"files",    icon:"file",     label:"Pliki" },
+    { id:"owners",   icon:"users",    label:"Właściciele" },
+    { id:"kw",       icon:"building", label:"KW Hotel" },
+  ];
+
+  const renderBadge = (n) => (n > 0 ? <span className="nav-badge">{n}</span> : null);
+
+  // PAKIET 7.3 — nagłówek grupy jako klikalny przycisk (zwijanie + persist Storage).
+  // W trybie navTop nagłówki są ukryte (CSS .app-root.nav-top .sidebar-section { display: none })
+  // → klasa sidebar-section-toggle też się chowa, więc zwijanie nie działa na pasku górnym, ale itemy zawsze widoczne.
+  const renderGroupHeader = (key, label) => (
+    <button type="button" className="sidebar-section sidebar-section-toggle"
+      onClick={() => toggleNavGroup(key)}>
+      <span className="nav-arrow">{navCollapsed[key] ? "▸" : "▾"}</span>
+      <span>{label}</span>
+    </button>
+  );
+
   // FIX: SidebarNav jako PLAIN JSX (nie funkcja-komponent), bo `const SidebarNav = () => {}`
   // wewnątrz App tworzył NOWY typ komponentu przy każdym renderze → React unmount/mount
   // → ScrollableTabs resetował scrollLeft do 0 → animacja edge tab zawsze szła „od początku listy".
@@ -8528,44 +8642,73 @@ export default function App() {
         className={`sidebar-item ${tab === "apartments" && !selectedApt && !selectedTask && !selectedOwner ? "active" : ""}`}
         onClick={() => { setTab("apartments"); setSelectedApt(null); setSelectedTask(null); setSelectedOwner(null); }}
       >
-        <Icon name="home" size={18} />Wszystkie pozycje
+        <Icon name="home" size={18} /><span className="sidebar-item-label">Wszystkie pozycje</span>
       </div>
 
       {categoriesInNav.length > 0 && (
         <>
-          <div className="sidebar-section" style={{ fontSize:9, fontWeight:700, letterSpacing:"0.12em", color:"var(--text2)", padding:"12px 20px 4px", textTransform:"uppercase", opacity:0.7 }}>
-            Kategorie
+          {renderGroupHeader("categories", "Kategorie")}
+          {!navCollapsed.categories && categoriesInNav.map(cat => {
+            const cnt = categoryCounts[cat.name] || 0;
+            return (
+              <div key={cat.id}
+                className={`sidebar-item ${tab === `cat_${cat.id}` ? "active" : ""}`}
+                onClick={() => { setTab(`cat_${cat.id}`); setSelectedApt(null); setSelectedTask(null); setSelectedOwner(null); }}
+                style={tab === `cat_${cat.id}` ? { borderLeftColor: cat.color, color: cat.color, background: `${cat.color}0a` } : {}}
+              >
+                <Icon name={cat.icon || "home"} size={18} color={tab === `cat_${cat.id}` ? cat.color : undefined} />
+                <span className="sidebar-item-label">{cat.name}</span>
+                {renderBadge(cnt)}
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {renderGroupHeader("operations", "Operacje")}
+      {!navCollapsed.operations && operationsItems.map(item => (
+        <div key={item.id}
+          className={`sidebar-item ${tab === item.id && !selectedApt && !selectedTask && !selectedOwner ? "active" : ""}`}
+          onClick={() => { setTab(item.id); setSelectedApt(null); setSelectedTask(null); setSelectedOwner(null); }}>
+          <Icon name={item.icon} size={18} />
+          <span className="sidebar-item-label">{item.label}</span>
+          {renderBadge(item.count || 0)}
+        </div>
+      ))}
+
+      {renderGroupHeader("others", "Pozostałe")}
+      {!navCollapsed.others && (
+        <>
+          {otherItems.map(item => (
+            <div key={item.id}
+              className={`sidebar-item ${tab === item.id && !selectedApt && !selectedTask && !selectedOwner ? "active" : ""}`}
+              onClick={() => { setTab(item.id); setSelectedApt(null); setSelectedTask(null); setSelectedOwner(null); }}>
+              <Icon name={item.icon} size={18} />
+              <span className="sidebar-item-label">{item.label}</span>
+            </div>
+          ))}
+          {/* PAKIET 7.5 — Ustawienia z rozwijanym submenu */}
+          <div
+            className={`sidebar-item ${tab === "settings" && !selectedApt && !selectedTask && !selectedOwner ? "active" : ""}`}
+            onClick={() => { setTab("settings"); setSelectedApt(null); setSelectedTask(null); setSelectedOwner(null); }}>
+            <Icon name="settings" size={18} />
+            <span className="sidebar-item-label">Ustawienia</span>
+            <button type="button"
+              className="sidebar-expand-btn"
+              title={settingsExpanded ? "Zwiń" : "Rozwiń zakładki ustawień"}
+              onClick={(e) => { e.stopPropagation(); toggleSettingsExpanded(); }}>
+              {settingsExpanded ? "▾" : "▸"}
+            </button>
           </div>
-          {categoriesInNav.map(cat => (
-            <div key={cat.id}
-              className={`sidebar-item ${tab === `cat_${cat.id}` ? "active" : ""}`}
-              onClick={() => { setTab(`cat_${cat.id}`); setSelectedApt(null); setSelectedTask(null); setSelectedOwner(null); }}
-              style={tab === `cat_${cat.id}` ? { borderLeftColor: cat.color, color: cat.color, background: `${cat.color}0a` } : {}}
-            >
-              <Icon name={cat.icon || "home"} size={18} color={tab === `cat_${cat.id}` ? cat.color : undefined} />{cat.name}
+          {settingsExpanded && settingsSubItems.map(sub => (
+            <div key={sub.id}
+              className={`sidebar-item sidebar-subitem ${tab === "settings" && settingsInitialTab === sub.id ? "active" : ""}`}
+              onClick={() => goToSettingsTab(sub.id)}>
+              <span className="sidebar-item-label">{sub.label}</span>
             </div>
           ))}
         </>
       )}
-
-      <div className="sidebar-section" style={{ fontSize:9, fontWeight:700, letterSpacing:"0.12em", color:"var(--text2)", padding:"12px 20px 4px", textTransform:"uppercase", opacity:0.7 }}>
-        Operacje
-      </div>
-      {[
-        { id:"cleaning",   icon:"check",    label:"Sprzątanie" },
-        { id:"tasks",      icon:"tasks",    label:"Zadania" },
-        { id:"loans",      icon:"swap",     label:"Pożyczki" },
-        { id:"files",      icon:"file",     label:"Pliki" },
-        { id:"owners",     icon:"users",    label:"Właściciele" },
-        { id:"kw",         icon:"building", label:"KW Hotel" },
-        { id:"settings",   icon:"settings", label:"Ustawienia" },
-      ].map(item => (
-        <div key={item.id}
-          className={`sidebar-item ${tab === item.id && !selectedApt && !selectedTask && !selectedOwner ? "active" : ""}`}
-          onClick={() => { setTab(item.id); setSelectedApt(null); setSelectedTask(null); setSelectedOwner(null); }}>
-          <Icon name={item.icon} size={18} />{item.label}
-        </div>
-      ))}
     </>
   );
   const sidebarNav = (
@@ -8861,6 +9004,8 @@ export default function App() {
           onSetAptColumns={setAptColumns}
           navPos={navPos}
           onSetNavPos={setNavPos}
+          initialTab={settingsInitialTab}
+          initialTabBump={settingsTabBump}
         />
       )}
 

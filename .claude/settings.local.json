@@ -35,7 +35,11 @@
       "Bash(git --no-pager diff)",
       "Bash(echo \"exit: $?\")",
       "Bash(awk '{$1=$1}1')",
-      "Bash(awk -F\"'\" '{print $2}')"
+      "Bash(awk -F\"'\" '{print $2}')",
+      "Bash(awk '{print $1}')",
+      "Bash(awk 'match\\($0, /^\\\\s+\\([0-9]+\\):/, arr\\) { print arr[1] }' /tmp/eslint_full.txt)",
+      "Bash(awk 'match\\($0, /^\\\\s+\\([0-9]+\\):/, arr\\) { print arr[1] }' /tmp/eslint_after.txt)",
+      "Bash(node -e \"const fs = require\\('fs'\\); const src = fs.readFileSync\\('src/App.jsx', 'utf8'\\); console.log\\('lines:', src.split\\('\\\\n'\\).length\\); console.log\\('size KB:', \\(src.length/1024\\).toFixed\\(1\\)\\);\")"
     ]
   }
 }
