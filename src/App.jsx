@@ -4920,6 +4920,24 @@ const FilesView = ({ apartments, files, onUpdate, currentUser }) => {
   );
 };
 
+// FIX 6.4 — reużywalny panel zmiennych SMS (ustawienia + ApartmentDetail).
+// Wcześniej w detalu apartamentu była tylko statyczna linijka "Zmienne: ..." bez
+// klikania ani opisów. Teraz oba miejsca renderują ten sam rozwijany panel.
+const SmsVariablesPanel = ({ onInsert }) => (
+  <details className="sms-vars-panel" open>
+    <summary>Dostępne zmienne — kliknij, aby wstawić</summary>
+    <div className="sms-vars-list">
+      {SMS_VARIABLES.map(v => (
+        <button type="button" key={v.name} className="sms-var-chip" onClick={() => onInsert(v.name)}>
+          <code>{v.name}</code>
+          <span className="sms-var-desc">{v.description}</span>
+          <span className="sms-var-ex">np. {v.example}</span>
+        </button>
+      ))}
+    </div>
+  </details>
+);
+
 // FIX 1.6 — wyniesione z SettingsView. Wcześniej zdefiniowane WEWNĄTRZ SettingsView,
 // przez co przy każdym setDraft (każdy znak) komponent był tworzony na nowo i textarea
 // traciła focus (ESLint: react-hooks/static-components). Top-level = stabilny typ.
@@ -4965,18 +4983,7 @@ const TemplateCard = ({ type, color, isEditing, template, isDefault, isManager, 
         </>
       ) : (
         <>
-          <details className="sms-vars-panel" open>
-            <summary>Dostępne zmienne — kliknij, aby wstawić</summary>
-            <div className="sms-vars-list">
-              {SMS_VARIABLES.map(v => (
-                <button type="button" key={v.name} className="sms-var-chip" onClick={() => insertVar(v.name)}>
-                  <code>{v.name}</code>
-                  <span className="sms-var-desc">{v.description}</span>
-                  <span className="sms-var-ex">np. {v.example}</span>
-                </button>
-              ))}
-            </div>
-          </details>
+          <SmsVariablesPanel onInsert={insertVar} />
           <textarea
             ref={taRef}
             value={draft}
@@ -6172,6 +6179,19 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
   });
   const [editingOverride, setEditingOverride] = useState(false);
   const [overrideDraft, setOverrideDraft] = useState("");
+  // FIX 6.4 — ref do textarea + insertVar dla SmsVariablesPanel w zakładce SMS detalu apartamentu.
+  const overrideTaRef = useRef(null);
+  const insertOverrideVar = (token) => {
+    const ta = overrideTaRef.current;
+    const cur = overrideDraft || "";
+    if (!ta) { setOverrideDraft(cur + token); return; }
+    const start = ta.selectionStart, end = ta.selectionEnd;
+    setOverrideDraft(cur.slice(0, start) + token + cur.slice(end));
+    requestAnimationFrame(() => {
+      const el = overrideTaRef.current;
+      if (el) { const pos = start + token.length; el.focus(); el.setSelectionRange(pos, pos); }
+    });
+  };
 
   const effectiveSmsTemplate = smsOverride ?? ((Settings.getAll().smsTemplates || {})[apt.status] || DEFAULT_SMS_TEMPLATES[apt.status] || DEFAULT_SMS_TEMPLATES["ZARZĄDZANIE"]);
   const hasOverride = smsOverride !== null && smsOverride !== undefined;
@@ -6183,6 +6203,14 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
   const [newItemCat,  setNewItemCat]  = useState("Niestandardowe"); // kategoria pomieszczenia dla wyposażenia
   const [confirmDelete, setConfirmDelete] = useState(null); // { kind, item }
   const [smsCopied, setSmsCopied] = useState(false);
+  // FIX 6.1/6.2 — edycja wyposażenia/tekstyliów przez modal (domyślnie read-only).
+  const [editKind, setEditKind] = useState(null); // null | "equip" | "text"
+  // FIX 6.3 — w modalu edycji wyposażenia: dodawanie/usuwanie pomieszczeń + podwójne potwierdzenie dla wbudowanych (FIX 3.A).
+  const [newRoomInModal, setNewRoomInModal] = useState("");
+  const [confirmRoomDelete,   setConfirmRoomDelete]   = useState(null); // pokoj non-builtin
+  const [roomDeleteStep1, setRoomDeleteStep1] = useState(null); // builtin: ostrzeżenie
+  const [roomDeleteStep2, setRoomDeleteStep2] = useState(null); // builtin: przepisanie nazwy
+  const [roomDeleteText,  setRoomDeleteText]  = useState("");
 
   // ── Notatki (array z datą) ───────────────────────────────────────────────
   const [aptNotes, setAptNotes] = useState(() => Storage.get(`apt_notes_${apt.id}`) || []);
@@ -6337,24 +6365,6 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
   const saveOrders    = (newOrd) => { setOrders(newOrd);   Storage.set(`apt_orders_${apt.id}`, newOrd); };
 
   // ── Inventory helpers ─────────────────────────────────────────────────────
-  const changeQty = (kind, id, delta) => {
-    if (!canEdit) return;
-    const isEquip = kind === "equip";
-    const list    = isEquip ? equipment : textiles;
-    const setFn   = isEquip ? setEquipment : setTextiles;
-    const saveFn  = isEquip ? saveEquipment : saveTextiles;
-    const item    = list.find(i => i.id === id);
-    if (!item) return;
-    const newQty  = item.qty + delta;
-
-    if (newQty <= 0 && delta < 0) {
-      setConfirmDelete({ kind, item });
-      return;
-    }
-    const next = list.map(i => i.id === id ? { ...i, qty: Math.max(0, newQty) } : i);
-    setFn(next); saveFn(next);
-  };
-
   const confirmDeleteItem = () => {
     if (!confirmDelete) return;
     const { kind, item } = confirmDelete;
@@ -6381,6 +6391,65 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
     }
     setNewItemName(s => ({ ...s, [field]: "" }));
     setNewItemQty(s => ({ ...s, [field]: 1 }));
+  };
+
+  // FIX 6.1/6.2 — bezpośrednie ustawienie ilości (modal używa NumberInput zamiast +/-).
+  const setItemQty = (kind, id, qty) => {
+    if (!canEdit) return;
+    const n = Math.max(0, Number(qty) || 0);
+    const list   = kind === "equip" ? equipment : textiles;
+    const item   = list.find(i => i.id === id);
+    if (!item) return;
+    if (n === 0) { setConfirmDelete({ kind, item }); return; }
+    const saveFn = kind === "equip" ? saveEquipment : saveTextiles;
+    saveFn(list.map(i => i.id === id ? { ...i, qty: n } : i));
+  };
+
+  // FIX 6.1 — usuwanie pozycji z modala (zawsze przez ConfirmModal — nie zniknie przez przypadek).
+  const askDeleteItem = (kind, item) => { if (canEdit) setConfirmDelete({ kind, item }); };
+
+  // FIX 6.3 — dodawanie pomieszczenia (per-apt), trigger re-renderu selectów przez roomRefresh.
+  const addRoomInModal = () => {
+    if (!canEdit) return;
+    const name = (newRoomInModal || "").trim();
+    if (!name) return;
+    EquipmentRooms.add({ name, aptId: apt.id });
+    setNewRoomInModal("");
+    setRoomRefresh(r => r + 1);
+  };
+
+  // FIX 6.3 — usunięcie pomieszczenia non-builtin (potwierdzenie przez ConfirmModal).
+  const doDeleteRoom = (room) => {
+    if (!canEdit || !room) return;
+    EquipmentRooms.remove(room.id);
+    setConfirmRoomDelete(null);
+    setRoomRefresh(r => r + 1);
+  };
+
+  // FIX 6.3 + 3.A — usunięcie wbudowanego pomieszczenia: przenosi pozycje z tą kategorią
+  // do „Niestandardowe" we WSZYSTKICH apartamentach (analogicznie jak w Ustawieniach).
+  const deleteBuiltinRoomFromModal = (room) => {
+    if (!canEdit || !room) return;
+    EquipmentRooms.remove(room.id);
+    let movedItems = 0, touchedApts = 0;
+    (apartments || []).forEach(a => {
+      const eq = Storage.get(`apt_equip_${a.id}`);
+      if (!Array.isArray(eq)) return;
+      let changed = false;
+      const next = eq.map(it => {
+        if (it.cat === room.name) { changed = true; movedItems++; return { ...it, cat: "Niestandardowe" }; }
+        return it;
+      });
+      if (changed) { Storage.set(`apt_equip_${a.id}`, next); touchedApts++; }
+    });
+    Audit.log("EQUIPMENT_DELETE_BUILTIN", currentUser, { item: room.name, movedItems, apartments: touchedApts });
+    // Odśwież własny stan, jeśli to ten apartament też dotyczy
+    const ourEq = Storage.get(`apt_equip_${apt.id}`);
+    if (Array.isArray(ourEq)) setEquipment(ourEq);
+    setRoomDeleteStep1(null);
+    setRoomDeleteStep2(null);
+    setRoomDeleteText("");
+    setRoomRefresh(r => r + 1);
   };
 
   // ── Orders ────────────────────────────────────────────────────────────────
@@ -6746,13 +6815,12 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
             </>
           ) : (
             <>
-              <p style={{ fontSize:11, color:"var(--text2)", marginBottom:8 }}>
-                Zmienne: <span className="sms-var">{"{aptName}"}</span> <span className="sms-var">{"{code}"}</span> <span className="sms-var">{"{wifi}"}</span> <span className="sms-var">{"{address}"}</span> <span className="sms-var">{"{checkinTime}"}</span> <span className="sms-var">{"{checkoutTime}"}</span>
-              </p>
+              <SmsVariablesPanel onInsert={insertOverrideVar} />
               <textarea
+                ref={overrideTaRef}
                 value={overrideDraft}
                 onChange={e => setOverrideDraft(e.target.value)}
-                style={{ width:"100%", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10, padding:"12px", color:"var(--text)", fontSize:13, fontFamily:"var(--font-body)", lineHeight:1.7, resize:"vertical", minHeight:200, boxSizing:"border-box" }}
+                style={{ width:"100%", background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10, padding:"12px", color:"var(--text)", fontSize:13, fontFamily:"var(--font-body)", lineHeight:1.7, resize:"vertical", minHeight:200, boxSizing:"border-box", marginTop:8 }}
               />
               <div style={{ display:"flex", gap:8, marginTop:10 }}>
                 <button className="btn btn-primary" style={{ flex:1 }} onClick={saveOverride}>✓ Zapisz jako własny</button>
@@ -6764,78 +6832,24 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
       )}
 
       {/* ── WYPOSAŻENIE — pogrupowane po kategorii + formularz dodawania ── */}
+      {/* FIX 6.1 — wyposażenie: domyślnie read-only, edycja przez modal (przycisk "✏ Edytuj"). */}
       {tab === "equip" && (
         <div className="detail-section">
-          <div className="detail-section-title"><Icon name="check" size={14} />Lista wyposażenia</div>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, flexWrap:"wrap", marginBottom:8 }}>
+            <div className="detail-section-title" style={{ marginBottom:0 }}><Icon name="check" size={14} />Lista wyposażenia</div>
+            {canEdit && (
+              <button className="btn btn-primary" style={{ padding:"8px 14px", fontSize:12 }} onClick={() => setEditKind("equip")}>
+                ✏ Edytuj wyposażenie
+              </button>
+            )}
+          </div>
           <p style={{ fontSize:12, color:"var(--text2)", marginBottom:12 }}>
             Standardowa lista wg załącznika NR 5 · {equipment.length} pozycji
           </p>
 
-          {canEdit && (
-            <div style={{ marginBottom:16, padding:12, background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10 }}>
-              <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:8 }}>
-                <select
-                  className="form-select"
-                  style={{ flex:"1 1 160px", minWidth:140, fontSize:12 }}
-                  value={newItemCat}
-                  onChange={e => setNewItemCat(e.target.value)}
-                >
-                  {[...EquipmentRooms.namesForApt(apt.id), "Niestandardowe"].filter((v,i,a) => a.indexOf(v) === i).map(c =>
-                    <option key={c} value={c}>{c}</option>
-                  )}
-              </select>
-              <input
-                className="form-input"
-                style={{ flex:"2 1 140px", minWidth:120 }}
-                placeholder="Nazwa (np. Zegar ścienny)"
-                value={newItemName.equip}
-                onChange={e => setNewItemName(s => ({ ...s, equip: e.target.value }))}
-                onKeyDown={e => { if (e.key === "Enter") addInventoryItem("equip"); }}
-              />
-              <NumberInput
-                className="form-input"
-                style={{ width:70 }}
-                steppers={false}
-                min={1}
-                placeholder="szt."
-                value={newItemQty.equip}
-                onChange={v => setNewItemQty(s => ({ ...s, equip: v }))}
-              />
-              <button
-                className="btn btn-primary"
-                style={{ padding:"10px 20px", fontWeight:600 }}
-                disabled={!newItemName.equip.trim()}
-                onClick={() => addInventoryItem("equip")}
-              >+ Dodaj</button>
-              </div>
-
-              {/* Quick add room for this apt */}
-              <div style={{ display:"flex", gap:6, alignItems:"center", fontSize:11, color:"var(--text2)", flexWrap:"wrap" }}>
-                <span>Brak pomieszczenia?</span>
-                <input
-                  className="form-input"
-                  style={{ width:130, padding:"4px 8px", fontSize:11 }}
-                  placeholder="np. Garderoba"
-                  id={`new-room-${apt.id}`}
-                />
-                <button
-                  style={{ background:"none", border:"1px solid var(--border)", borderRadius:6, padding:"4px 10px", color:"var(--accent)", fontSize:11, fontWeight:700, cursor:"pointer" }}
-                  onClick={() => {
-                    const inp = document.getElementById(`new-room-${apt.id}`);
-                    if (inp && inp.value.trim()) {
-                      EquipmentRooms.add({ name: inp.value.trim(), aptId: apt.id });
-                      inp.value = "";
-                      setRoomRefresh(r => r + 1); // force select to update
-                    }
-                  }}
-                >+ Dodaj pomieszczenie</button>
-              </div>
-            </div>
-          )}
-
           {equipment.length === 0 && <p style={{ color:"var(--text2)", fontSize:14, textAlign:"center", padding:"20px 0" }}>Brak pozycji.</p>}
 
-          {/* Grupowanie po kategorii */}
+          {/* Grupowanie po kategorii (read-only) */}
           {(() => {
             const byCat = equipment.reduce((acc, item) => {
               const k = item.cat || "Inne";
@@ -6849,9 +6863,6 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
               return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
             });
             // FIX 1.7 — pozycje wypożyczone z tego apartamentu (aktywne pożyczki wychodzące).
-            // Nazwy w pożyczkach to wolny tekst, więc dopasowanie jest znormalizowane
-            // (lowercase + zwinięte spacje) z podciągiem, by "Czajnik" trafiał w
-            // "Czajnik elektryczny", "Telewizor" w "Telewizor (sypialnia)" itd.
             const activeOut = (loans || []).filter(l => l.status === "active" && l.fromAptId === apt.id);
             const normName = (s) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
             const namesMatch = (a, b) => {
@@ -6884,11 +6895,7 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
                           >🔄 Wypożyczone do {aptNameById(loan.toAptId)}</button>
                         )}
                       </div>
-                      <div className="inventory-qty">
-                        {canEdit && <button className="qty-btn" onClick={() => changeQty("equip", item.id, -1)}>−</button>}
-                        <span className="qty-val">{item.qty}</span>
-                        {canEdit && <button className="qty-btn" onClick={() => changeQty("equip", item.id, +1)}>+</button>}
-                      </div>
+                      <span style={{ fontSize:14, fontWeight:700, color:"var(--text)", padding:"2px 10px", background:"var(--surface2)", borderRadius:6, minWidth:32, textAlign:"center" }}>×{item.qty}</span>
                     </div>
                   );
                 })}
@@ -6898,48 +6905,20 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
         </div>
       )}
 
-      {/* ── TEKSTYLIA — z rozmiarami ze standardu ── */}
+      {/* FIX 6.2 — tekstylia: domyślnie read-only, edycja przez modal (przycisk "✏ Edytuj"). */}
       {tab === "textiles" && (
         <div className="detail-section">
-          <div className="detail-section-title"><Icon name="star" size={14} />Lista tekstyliów</div>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, flexWrap:"wrap", marginBottom:8 }}>
+            <div className="detail-section-title" style={{ marginBottom:0 }}><Icon name="star" size={14} />Lista tekstyliów</div>
+            {canEdit && (
+              <button className="btn btn-primary" style={{ padding:"8px 14px", fontSize:12 }} onClick={() => setEditKind("text")}>
+                ✏ Edytuj tekstylia
+              </button>
+            )}
+          </div>
           <p style={{ fontSize:12, color:"var(--text2)", marginBottom:12 }}>
             Standardowa lista wg Wykazu Tekstyliów · apartament {apt.capacity}-osobowy · {textiles.length} pozycji
           </p>
-
-          {canEdit && (
-            <div style={{ display:"flex", gap:8, marginBottom:16, padding:12, background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10, flexWrap:"wrap" }}>
-              <input
-                className="form-input"
-                style={{ flex:"2 1 140px", minWidth:120 }}
-                placeholder="Nazwa (np. Pled dekoracyjny)"
-                value={newItemName.text}
-                onChange={e => setNewItemName(s => ({ ...s, text: e.target.value }))}
-                onKeyDown={e => { if (e.key === "Enter") addInventoryItem("text"); }}
-              />
-              <input
-                className="form-input"
-                style={{ width:100 }}
-                placeholder="Rozmiar"
-                value={newItemSize}
-                onChange={e => setNewItemSize(e.target.value)}
-              />
-              <NumberInput
-                className="form-input"
-                style={{ width:70 }}
-                steppers={false}
-                min={1}
-                placeholder="szt."
-                value={newItemQty.text}
-                onChange={v => setNewItemQty(s => ({ ...s, text: v }))}
-              />
-              <button
-                className="btn btn-primary"
-                style={{ padding:"0 18px" }}
-                disabled={!newItemName.text.trim()}
-                onClick={() => addInventoryItem("text")}
-              >+ Dodaj</button>
-            </div>
-          )}
 
           {textiles.length === 0 && <p style={{ color:"var(--text2)", fontSize:14, textAlign:"center", padding:"20px 0" }}>Brak pozycji.</p>}
           {textiles.map(item => (
@@ -6948,11 +6927,7 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
                 <div style={{ fontSize:14 }}>{item.name}</div>
                 {item.size && <div style={{ fontSize:11, color:"var(--text2)", marginTop:2 }}>Rozmiar: {item.size}</div>}
               </div>
-              <div className="inventory-qty">
-                {canEdit && <button className="qty-btn" onClick={() => changeQty("text", item.id, -1)}>−</button>}
-                <span className="qty-val">{item.qty}</span>
-                {canEdit && <button className="qty-btn" onClick={() => changeQty("text", item.id, +1)}>+</button>}
-              </div>
+              <span style={{ fontSize:14, fontWeight:700, color:"var(--text)", padding:"2px 10px", background:"var(--surface2)", borderRadius:6, minWidth:32, textAlign:"center" }}>×{item.qty}</span>
             </div>
           ))}
         </div>
@@ -7107,6 +7082,220 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
           onClose={() => setConfirmDelete(null)}
           onConfirm={confirmDeleteItem}
         />
+      )}
+
+      {/* FIX 6.1/6.2/6.3 — Modal edycji wyposażenia/tekstyliów (wspólny). */}
+      {editKind && (() => {
+        const kind = editKind;
+        const isEquip = kind === "equip";
+        const items   = isEquip ? equipment : textiles;
+        const field   = isEquip ? "equip" : "text";
+        const roomsForApt = isEquip ? EquipmentRooms.forApt(apt.id) : [];
+        // Roomrefresh zmusza re-render listy pomieszczeń (nieużywane bezpośrednio, ale przeczytanie wymusza ślad).
+        void roomRefresh;
+        return (
+          <FloatingModal open onClose={() => setEditKind(null)} title={isEquip ? "Edycja wyposażenia" : "Edycja tekstyliów"} size="lg">
+            {/* ── Sekcja: dodawanie nowej pozycji ── */}
+            <div style={{ padding:14, background:"var(--surface2)", border:"1px solid var(--border)", borderRadius:10, marginBottom:16 }}>
+              <div style={{ fontSize:11, color:"var(--text2)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:10 }}>
+                + Dodaj nową pozycję
+              </div>
+              <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                {isEquip && (
+                  <select
+                    className="form-select"
+                    style={{ flex:"1 1 160px", minWidth:140, fontSize:12 }}
+                    value={newItemCat}
+                    onChange={e => setNewItemCat(e.target.value)}
+                  >
+                    {[...EquipmentRooms.namesForApt(apt.id), "Niestandardowe"].filter((v,i,a) => a.indexOf(v) === i).map(c =>
+                      <option key={c} value={c}>{c}</option>
+                    )}
+                  </select>
+                )}
+                <input
+                  className="form-input"
+                  style={{ flex:"2 1 140px", minWidth:120 }}
+                  placeholder={isEquip ? "Nazwa (np. Zegar ścienny)" : "Nazwa (np. Pled dekoracyjny)"}
+                  value={newItemName[field]}
+                  onChange={e => setNewItemName(s => ({ ...s, [field]: e.target.value }))}
+                  onKeyDown={e => { if (e.key === "Enter") addInventoryItem(kind); }}
+                />
+                {!isEquip && (
+                  <input
+                    className="form-input"
+                    style={{ width:100 }}
+                    placeholder="Rozmiar"
+                    value={newItemSize}
+                    onChange={e => setNewItemSize(e.target.value)}
+                  />
+                )}
+                <NumberInput
+                  className="form-input"
+                  style={{ width:80 }}
+                  steppers={false}
+                  min={1}
+                  placeholder="szt."
+                  value={newItemQty[field]}
+                  onChange={v => setNewItemQty(s => ({ ...s, [field]: v }))}
+                />
+                <button
+                  className="btn btn-primary"
+                  style={{ padding:"10px 20px", fontWeight:600 }}
+                  disabled={!(newItemName[field] || "").trim()}
+                  onClick={() => addInventoryItem(kind)}
+                >+ Dodaj</button>
+              </div>
+            </div>
+
+            {/* ── Sekcja: lista pozycji ── */}
+            <div style={{ fontSize:11, color:"var(--text2)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:10 }}>
+              Pozycje ({items.length})
+            </div>
+            {items.length === 0 ? (
+              <p style={{ color:"var(--text2)", fontSize:13, textAlign:"center", padding:"16px 0" }}>Brak pozycji.</p>
+            ) : (
+              <div style={{ marginBottom: isEquip ? 20 : 0 }}>
+                {items.map(item => (
+                  <div key={item.id} className="inventory-row" style={{ alignItems:"center" }}>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:14 }}>{item.name}</div>
+                      {isEquip
+                        ? <div style={{ fontSize:11, color:"var(--text2)", marginTop:2 }}>{item.cat || "Inne"}</div>
+                        : (item.size && <div style={{ fontSize:11, color:"var(--text2)", marginTop:2 }}>Rozmiar: {item.size}</div>)
+                      }
+                    </div>
+                    <NumberInput
+                      className="form-input"
+                      style={{ width:80 }}
+                      steppers
+                      min={0}
+                      value={item.qty}
+                      onChange={v => setItemQty(kind, item.id, v)}
+                    />
+                    <button
+                      onClick={() => askDeleteItem(kind, item)}
+                      title="Usuń pozycję"
+                      style={{ marginLeft:8, background:"rgba(239,68,68,0.12)", border:"none", borderRadius:8, padding:"8px 10px", color:"var(--red)", cursor:"pointer" }}
+                    ><Icon name="trash" size={12} /></button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── FIX 6.3 — Sekcja Pomieszczeń (tylko dla wyposażenia) — wyraźnie oddzielona ── */}
+            {isEquip && (
+              <div style={{ marginTop:16, padding:14, background:"rgba(16,185,129,0.06)", border:"1px solid rgba(16,185,129,0.3)", borderRadius:10 }}>
+                <div style={{ fontSize:11, color:"var(--green)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:10, display:"flex", alignItems:"center", gap:6 }}>
+                  <Icon name="building" size={12} />Pomieszczenia ({roomsForApt.length})
+                </div>
+                <p style={{ fontSize:11, color:"var(--text2)", marginBottom:10, lineHeight:1.5 }}>
+                  Pomieszczenia służą do grupowania pozycji wyposażenia. Globalne są wspólne dla wszystkich apartamentów, lokalne — tylko dla {apt.name}.
+                </p>
+
+                {roomsForApt.length > 0 && (
+                  <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, overflow:"hidden", marginBottom:10 }}>
+                    {roomsForApt.map(room => (
+                      <div key={room.id} style={{ padding:"8px 12px", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", gap:8 }}>
+                        <span style={{ flex:1, fontSize:13 }}>{room.name}</span>
+                        {room.builtin && <span style={{ fontSize:9, fontWeight:700, letterSpacing:"0.08em", padding:"2px 6px", borderRadius:4, background:"rgba(59,130,246,0.12)", color:"var(--accent)" }}>WBUDOWANA</span>}
+                        {!room.builtin && !room.aptId && <span style={{ fontSize:9, fontWeight:700, letterSpacing:"0.08em", padding:"2px 6px", borderRadius:4, background:"rgba(16,185,129,0.12)", color:"var(--green)" }}>GLOBALNA</span>}
+                        {!room.builtin && room.aptId && <span style={{ fontSize:9, fontWeight:700, letterSpacing:"0.08em", padding:"2px 6px", borderRadius:4, background:"rgba(245,158,11,0.12)", color:"var(--yellow)" }}>LOKALNA</span>}
+                        {!room.builtin && (
+                          <button onClick={() => setConfirmRoomDelete(room)} title="Usuń pomieszczenie" style={{ background:"rgba(239,68,68,0.12)", border:"none", borderRadius:6, padding:"4px 8px", cursor:"pointer", color:"var(--red)", fontSize:11, fontWeight:700 }}>🗑</button>
+                        )}
+                        {room.builtin && (
+                          <button onClick={() => { setRoomDeleteText(""); setRoomDeleteStep1(room); }} title="Usuń wbudowane (podwójne potwierdzenie)" style={{ background:"var(--red)", border:"none", borderRadius:6, padding:"4px 8px", cursor:"pointer", color:"#fff", fontSize:11, fontWeight:700 }}>🗑</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+                  <input
+                    className="form-input"
+                    style={{ flex:"1 1 180px", minWidth:140 }}
+                    placeholder="Nazwa nowego pomieszczenia (np. Garderoba)"
+                    value={newRoomInModal}
+                    onChange={e => setNewRoomInModal(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") addRoomInModal(); }}
+                  />
+                  <button
+                    className="btn"
+                    style={{ background:"var(--green)", color:"#fff", border:"none", padding:"10px 16px", fontWeight:700 }}
+                    disabled={!newRoomInModal.trim()}
+                    onClick={addRoomInModal}
+                  >+ Dodaj pomieszczenie</button>
+                </div>
+              </div>
+            )}
+
+            <div className="btn-row" style={{ marginTop:20 }}>
+              <button className="btn btn-primary" style={{ flex:1 }} onClick={() => setEditKind(null)}>Zamknij</button>
+            </div>
+          </FloatingModal>
+        );
+      })()}
+
+      {/* FIX 6.3 — pomieszczenie non-builtin: pojedyncze potwierdzenie */}
+      {confirmRoomDelete && (
+        <ConfirmModal
+          open
+          variant="danger"
+          title="Usunąć pomieszczenie?"
+          message={<>Pomieszczenie <strong style={{ color:"var(--text)" }}>{confirmRoomDelete.name}</strong> zostanie usunięte. Pozycje wyposażenia przypisane do tego pomieszczenia zachowają swoją kategorię w danych (mogą trafić do „Inne" w wyświetlaniu).</>}
+          confirmLabel="Usuń"
+          onClose={() => setConfirmRoomDelete(null)}
+          onConfirm={() => doDeleteRoom(confirmRoomDelete)}
+        />
+      )}
+
+      {/* FIX 6.3 + 3.A — krok 1: ostrzeżenie przed usunięciem wbudowanego pomieszczenia */}
+      {roomDeleteStep1 && (
+        <ConfirmModal
+          open
+          variant="danger"
+          title="Czy na pewno chcesz usunąć wbudowane pomieszczenie?"
+          message={<>
+            <strong style={{ color:"var(--text)" }}>{roomDeleteStep1.name}</strong> to pomieszczenie wbudowane (domyślna konfiguracja). Usunięcie spowoduje, że:<br /><br />
+            • Pomieszczenie zniknie u WSZYSTKICH apartamentów<br />
+            • Pozycje wyposażenia przypisane do niego zostaną przeniesione do „Niestandardowe"<br />
+            • Operacja jest nieodwracalna<br /><br />
+            Czy chcesz kontynuować?
+          </>}
+          confirmLabel="Tak, kontynuuj"
+          onClose={() => setRoomDeleteStep1(null)}
+          onConfirm={() => { const r = roomDeleteStep1; setRoomDeleteStep1(null); setRoomDeleteText(""); setRoomDeleteStep2(r); }}
+        />
+      )}
+
+      {/* FIX 6.3 + 3.A — krok 2: przepisanie nazwy */}
+      {roomDeleteStep2 && (
+        <FloatingModal open onClose={() => { setRoomDeleteStep2(null); setRoomDeleteText(""); }} title="Ostateczne potwierdzenie" size="sm">
+          <p style={{ fontSize:14, lineHeight:1.6, marginBottom:12 }}>
+            Wpisz nazwę pomieszczenia poniżej, żeby potwierdzić usunięcie:<br />
+            <strong style={{ color:"var(--red)" }}>{roomDeleteStep2.name}</strong>
+          </p>
+          <input
+            className="form-input"
+            autoFocus
+            value={roomDeleteText}
+            onChange={e => setRoomDeleteText(e.target.value)}
+            placeholder="Wpisz dokładną nazwę…"
+            style={{ width:"100%", boxSizing:"border-box", marginBottom:14 }}
+            onKeyDown={e => { if (e.key === "Enter" && roomDeleteText === roomDeleteStep2.name) deleteBuiltinRoomFromModal(roomDeleteStep2); }}
+          />
+          <div className="btn-row" style={{ display:"flex", gap:10 }}>
+            <button className="btn btn-ghost" style={{ flex:1 }} onClick={() => { setRoomDeleteStep2(null); setRoomDeleteText(""); }}>Anuluj</button>
+            <button
+              className="btn"
+              disabled={roomDeleteText !== roomDeleteStep2.name}
+              onClick={() => deleteBuiltinRoomFromModal(roomDeleteStep2)}
+              style={{ flex:1, border:"none", fontWeight:700, background: roomDeleteText === roomDeleteStep2.name ? "var(--red)" : "var(--surface2)", color: roomDeleteText === roomDeleteStep2.name ? "#fff" : "var(--text2)", cursor: roomDeleteText === roomDeleteStep2.name ? "pointer" : "not-allowed" }}
+            >Usuń definitywnie</button>
+          </div>
+        </FloatingModal>
       )}
 
       {/* ── POŻYCZKI (z/do tego apartamentu) — FIX 3.C: aktywne vs historia ── */}
@@ -7890,6 +8079,9 @@ export default function App() {
     const inProg = active.some(t => t.status === "W trakcie");
     const hasTask = active.length > 0;
     const hasLoan = (loans || []).some(l => l.status === "active" && (l.fromAptId === apt.id || l.toAptId === apt.id));
+    // FIX 7.6 — aktywne zamówienia (status ≠ "done") liczone z apt_orders_<id>.
+    const aptOrders = Storage.get(`apt_orders_${apt.id}`) || [];
+    const activeOrders = aptOrders.filter(o => o.status !== "done").length;
     return (
       <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:6 }}>
         {/* Zadania — klik → zakładka Zadania apartamentu; przygaszone gdy brak */}
@@ -7906,6 +8098,15 @@ export default function App() {
           onClick={(e) => { e.stopPropagation(); openApt(apt, "loans"); }}>
           <span style={{ display:"inline-flex", opacity: hasLoan ? 1 : 0.4 }}>
             <Icon name="swap" size={16} color={hasLoan ? "var(--yellow)" : "var(--text2)"} />
+          </span>
+        </button>
+        {/* FIX 7.6 — Zamówienia — klik → zakładka Zamówienia; pokazuje liczbę gdy > 0 */}
+        <button type="button" className="apt-ind"
+          title={activeOrders > 0 ? `${activeOrders} aktywne zamówienie/-a — otwórz zamówienia` : "Zamówienia apartamentu"}
+          onClick={(e) => { e.stopPropagation(); openApt(apt, "orders"); }}>
+          <span style={{ display:"inline-flex", alignItems:"center", gap:3, opacity: activeOrders > 0 ? 1 : 0.4 }}>
+            <Icon name="package" size={16} color={activeOrders > 0 ? "var(--accent)" : "var(--text2)"} />
+            {activeOrders > 0 && <span style={{ fontSize:11, fontWeight:700, color:"var(--accent)", letterSpacing:"0.02em" }}>{activeOrders}</span>}
           </span>
         </button>
       </div>
