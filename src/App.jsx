@@ -2700,7 +2700,8 @@ const styles = `
     .sidebar-expand-btn { background: transparent; border: 0; color: inherit; cursor: pointer; padding: 2px 6px; font-size: 12px; flex-shrink: 0; }
     .sidebar-expand-btn:hover { color: var(--accent); }
     .sidebar-subitem { padding-left: 44px !important; font-size: 12px; }
-    .app-root.nav-top .sidebar-subitem { display: none; }
+    .app-root.nav-top .sidebar-subitem,
+    .app-root.nav-top .sidebar-expand-btn { display: none; }
     .sidebar-footer { padding: 16px 20px; border-top: 1px solid var(--border); }
     .sidebar-user { font-size: 12px; color: var(--text2); font-weight: 600; margin-bottom: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -2751,8 +2752,10 @@ const styles = `
     .app-root.nav-top .sidebar-user { margin-bottom: 0; max-width: 150px; }
     .app-root.nav-top .sidebar-footer button { width: auto !important; margin-bottom: 0 !important; white-space: nowrap; }
     .app-root.nav-top .app { flex: 0 0 auto; margin: 56px 0 0 0; min-height: calc(100vh - 56px); }
-    /* sticky nagłówek treści przykleja się pod paskiem, nie pod nim */
-    .app-root.nav-top .header { top: 56px; padding: 10px 40px !important; min-height: 0 !important; }
+    /* FIX: top=0, bo .app ma overflow:hidden → jest scroll-context dla sticky,
+       a .app startuje już na viewport y=56 (margin-top:56). Wartość 56px daje
+       podwójne przesunięcie: header wisi o 56px niżej i zostawia tabs nagie nad nim. */
+    .app-root.nav-top .header { top: 0; padding: 10px 40px !important; min-height: 0 !important; }
     .app-root.nav-top .header h1 { font-size: 18px !important; }
     .app-root.nav-top .header .icon-btn { width: 30px !important; height: 30px !important; }
   }
@@ -8687,10 +8690,17 @@ export default function App() {
               <span className="sidebar-item-label">{item.label}</span>
             </div>
           ))}
-          {/* PAKIET 7.5 — Ustawienia z rozwijanym submenu */}
+          {/* PAKIET 7.5 — Ustawienia z rozwijanym submenu.
+              W trybie lewego menu klik w wiersz rozwija też submenu (strzałka i tak chowana w navTop). */}
           <div
             className={`sidebar-item ${tab === "settings" && !selectedApt && !selectedTask && !selectedOwner ? "active" : ""}`}
-            onClick={() => { setTab("settings"); setSelectedApt(null); setSelectedTask(null); setSelectedOwner(null); }}>
+            onClick={() => {
+              setTab("settings"); setSelectedApt(null); setSelectedTask(null); setSelectedOwner(null);
+              if (!navTop && !settingsExpanded) {
+                setSettingsExpanded(true);
+                Storage.set("nav_settings_expanded", true);
+              }
+            }}>
             <Icon name="settings" size={18} />
             <span className="sidebar-item-label">Ustawienia</span>
             <button type="button"
