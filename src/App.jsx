@@ -16,7 +16,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, createContext, useCo
 // W produkcji MUSI być zdefiniowana, inaczej hasło Demo#2026! trafi do bundla.
 // ════════════════════════════════════════════════════════════════════════════
 // eslint-disable-next-line no-undef
-const __DEMO_BUILD__ = (typeof __VELARFLOW_DEMO__ !== "undefined") ? __VELARFLOW_DEMO__ : true;
+const __DEMO_BUILD__ = true;
 
 // ════════════════════════════════════════════════════════════════════════════
 // § CONFIG — jeden centralny obiekt konfiguracji (#61)
