@@ -1455,8 +1455,68 @@ const STANDARD_TEXTILES = [
   { name:"Podkład duży",        size:"160/200" },
 ];
 
-// Pozycje używane w zamówieniach (standardowe + niestandardowe)
-const ORDER_ITEMS = STANDARD_TEXTILES.map(t => `${t.name} ${t.size}`);
+// PAKIET 8a.1 — Service do edytowalnej globalnej listy tekstyliów.
+// TODO (osobny pakiet): dodać `defaultQtyFormula` (np. "1 na osobę + 1 zapas") — wymaga decyzji co do
+// wzoru (constant / formuła / per typ łóżka), więc na razie ilość liczona jak wcześniej w detalu apt.
+const TextilesService = {
+  _key: "textiles_defaults",  // MUST-4: bez prefiksu, Storage._ns dokleja "velarflow:"
+
+  _seed() {
+    return STANDARD_TEXTILES.map((t, i) => ({
+      id: `tex_${i + 1}`,
+      name: t.name,
+      size: t.size,
+      builtin: true,
+      order: i,
+    }));
+  },
+
+  getAll() {
+    let list = Storage.get(this._key);
+    if (!list || !Array.isArray(list) || list.length === 0) {
+      list = this._seed();
+      Storage.set(this._key, list);
+    }
+    return [...list].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  },
+
+  save(list) { Storage.set(this._key, list); },
+
+  add(item) {
+    const list = this.getAll();
+    const maxOrder = list.reduce((m, t) => Math.max(m, t.order || 0), 0);
+    const entry = {
+      id: `tex_${Date.now()}_${Math.random().toString(36).slice(2,5)}`,
+      name: (item.name || "").trim(),
+      size: (item.size || "").trim(),
+      builtin: false,
+      order: maxOrder + 1,
+    };
+    if (!entry.name) return null;
+    this.save([...list, entry]);
+    return entry;
+  },
+
+  update(id, changes) {
+    const list = this.getAll().map(t => t.id === id ? { ...t, ...changes, builtin: t.builtin } : t);
+    this.save(list);
+    return list;
+  },
+
+  remove(id) {
+    this.save(this.getAll().filter(t => t.id !== id));
+  },
+
+  reorder(orderedIds) {
+    const map = Object.fromEntries(orderedIds.map((id, i) => [id, i]));
+    const list = this.getAll().map(t => ({ ...t, order: map[t.id] ?? t.order }));
+    this.save(list);
+    return list;
+  },
+};
+
+// Pozycje używane w zamówieniach — dynamiczne, zależne od TextilesService
+const getOrderItems = () => TextilesService.getAll().map(t => `${t.name} ${t.size}`);
 
 // ── Settings — globalne ustawienia aplikacji ──────────────────────────────
 // Kluczowe: szablony SMS dla ZARZĄDZANIE i OBSŁUGA oraz overrides per apt
@@ -1508,11 +1568,14 @@ const Categories = {
 
   getAll() {
     const stored = Storage.get(this._key);
-    if (stored && Array.isArray(stored) && stored.length > 0) return stored;
+    if (stored && Array.isArray(stored) && stored.length > 0) {
+      // PAKIET 8a.4 — sortowanie po `order` (fallback do 999 dla starych zapisów)
+      return [...stored].sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+    }
     // Seed z dwóch wbudowanych kategorii (edytowalne ale z flagą builtin)
     const seed = [
-      { id: "zarzadzanie", name: "ZARZĄDZANIE", color: "#3B82F6", icon: "building", showInNav: true,  builtin: true },
-      { id: "obsluga",     name: "OBSŁUGA",     color: "#a78bfa", icon: "key",      showInNav: true,  builtin: true },
+      { id: "zarzadzanie", name: "ZARZĄDZANIE", color: "#3B82F6", icon: "building", showInNav: true,  builtin: true, order: 0 },
+      { id: "obsluga",     name: "OBSŁUGA",     color: "#a78bfa", icon: "key",      showInNav: true,  builtin: true, order: 1 },
     ];
     this.save(seed);
     return seed;
@@ -1531,6 +1594,7 @@ const Categories = {
   add(cat) {
     const list = this.getAll();
     const id = cat.id || cat.name.toLowerCase().replace(/\s+/g,"_").replace(/[^a-z0-9_]/g,"").slice(0,30) + "_" + Date.now().toString(36);
+    const maxOrder = list.reduce((m, c) => Math.max(m, c.order ?? 0), 0);
     const entry = {
       id,
       name: cat.name.trim().toUpperCase(),
@@ -1538,6 +1602,7 @@ const Categories = {
       icon: cat.icon || "home",
       showInNav: cat.showInNav !== false,
       builtin: false,
+      order: maxOrder + 1,
     };
     this.save([...list, entry]);
     return entry;
@@ -1871,9 +1936,12 @@ const EquipmentRooms = {
 
   getAll() {
     const stored = Storage.get(this._key);
-    if (stored && Array.isArray(stored) && stored.length > 0) return stored;
+    if (stored && Array.isArray(stored) && stored.length > 0) {
+      // PAKIET 8a.3 — sortowanie po order (fallback do 999 dla starych rekordów bez pola)
+      return [...stored].sort((a, b) => (a.order ?? 999) - (b.order ?? 999));
+    }
     const seed = DEFAULT_ROOMS.map((name, i) => ({
-      id: `room_${i}`, name, builtin: true, aptId: null, // null = globalna
+      id: `room_${i}`, name, builtin: true, aptId: null, order: i, // null = globalna
     }));
     this.save(seed);
     return seed;
@@ -1892,11 +1960,13 @@ const EquipmentRooms = {
   add(room) {
     const list = this.getAll();
     const id = `room_${Date.now()}_${Math.random().toString(36).slice(2,5)}`;
+    const maxOrder = list.reduce((m, r) => Math.max(m, r.order ?? 0), 0);
     const entry = {
       id,
       name: (room.name || "").trim(),
       builtin: false,
       aptId: room.aptId || null, // null = globalna, number = per-apt
+      order: maxOrder + 1,
     };
     if (!entry.name) return null;
     this.save([...list, entry]);
@@ -1905,6 +1975,14 @@ const EquipmentRooms = {
 
   update(id, patch) {
     this.save(this.getAll().map(r => r.id === id ? { ...r, ...patch, builtin: r.builtin } : r));
+  },
+
+  // PAKIET 8a.3 — reorder po liście id (kolejność na liście = nowy order)
+  reorder(orderedIds) {
+    const map = Object.fromEntries(orderedIds.map((id, i) => [id, i]));
+    const list = this.getAll().map(r => ({ ...r, order: map[r.id] ?? r.order ?? 999 }));
+    this.save(list);
+    return list;
   },
 
   remove(id) {
@@ -5030,7 +5108,7 @@ const TemplateCard = ({ type, color, isEditing, template, isDefault, isManager, 
   );
 };
 
-const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onToggleTheme, aptColumns, onSetAptColumns, navPos, onSetNavPos, initialTab, initialTabBump }) => {
+const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onToggleTheme, aptColumns, onSetAptColumns, navPos, onSetNavPos, initialTab, initialTabBump, onOpenKw }) => {
   const isManager = currentUser && currentUser.role === ROLES.MANAGER;
   const [settingsTab, setSettingsTab] = useState(initialTab || "general"); // general | categories | equipment | sms
   // PAKIET 7.5 — deep-link z submenu nawigacji. initialTabBump rośnie przy każdym kliknięciu submenu,
@@ -5055,6 +5133,16 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
   const [roomDeleteStep1, setRoomDeleteStep1] = useState(null); // room — pierwsze ostrzeżenie
   const [roomDeleteStep2, setRoomDeleteStep2] = useState(null); // room — przepisanie nazwy
   const [roomDeleteText,  setRoomDeleteText]  = useState("");
+  // PAKIET 8a.3 — edycja nazwy pomieszczenia
+  const [editingRoom, setEditingRoom] = useState(null); // { id, name, ... } | null
+
+  // PAKIET 8a.1 — Tekstylia (globalna lista edytowalna)
+  const [textiles, setTextiles] = useState(() => TextilesService.getAll());
+  const refreshTextiles = () => setTextiles(TextilesService.getAll());
+  const [editingTextile, setEditingTextile] = useState(null); // { create:true } | item | null
+  const [textileDeleteStep1, setTextileDeleteStep1] = useState(null);
+  const [textileDeleteStep2, setTextileDeleteStep2] = useState(null);
+  const [textileDeleteText, setTextileDeleteText] = useState("");
 
   // ── Zespół — osoby dowodzące sprzątaniem ──────────────────────────────
   const [leaders, setLeaders] = useState(() => Settings.getCleaningLeaders());
@@ -5136,6 +5224,75 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
     if (!isManager) return;
     EquipmentRooms.remove(id);
     refreshRooms();
+  };
+
+  // PAKIET 8a.3 — reorder globalnych pomieszczeń strzałkami ▲▼
+  const moveRoom = (id, dir) => {
+    if (!isManager) return;
+    const list = eqRooms.filter(r => !r.aptId);
+    const idx = list.findIndex(r => r.id === id);
+    if (idx < 0) return;
+    const newIdx = idx + dir;
+    if (newIdx < 0 || newIdx >= list.length) return;
+    const reordered = [...list];
+    [reordered[idx], reordered[newIdx]] = [reordered[newIdx], reordered[idx]];
+    EquipmentRooms.reorder(reordered.map(r => r.id));
+    refreshRooms();
+  };
+
+  const saveRoomEdit = () => {
+    if (!isManager || !editingRoom) return;
+    const name = (editingRoom.name || "").trim();
+    if (!name) return;
+    EquipmentRooms.update(editingRoom.id, { name });
+    refreshRooms();
+    setEditingRoom(null);
+  };
+
+  // PAKIET 8a.1 — Helpery dla TEKSTYLIA
+  const moveTextile = (id, dir) => {
+    if (!isManager) return;
+    const idx = textiles.findIndex(t => t.id === id);
+    if (idx < 0) return;
+    const newIdx = idx + dir;
+    if (newIdx < 0 || newIdx >= textiles.length) return;
+    const reordered = [...textiles];
+    [reordered[idx], reordered[newIdx]] = [reordered[newIdx], reordered[idx]];
+    TextilesService.reorder(reordered.map(t => t.id));
+    refreshTextiles();
+  };
+
+  const saveTextileEdit = () => {
+    if (!isManager || !editingTextile) return;
+    const name = (editingTextile.name || "").trim();
+    const size = (editingTextile.size || "").trim();
+    if (!name) return;
+    if (editingTextile.create) {
+      TextilesService.add({ name, size });
+    } else {
+      TextilesService.update(editingTextile.id, { name, size });
+    }
+    refreshTextiles();
+    setEditingTextile(null);
+  };
+
+  const handleDeleteTextile = (t) => {
+    if (!isManager) return;
+    if (t.builtin) {
+      setTextileDeleteText("");
+      setTextileDeleteStep1(t);
+    } else {
+      setTextileDeleteStep1(t); // też confirm, ale z jednym krokiem (rozróżniamy w renderze)
+    }
+  };
+
+  const confirmDeleteTextile = (t) => {
+    if (!isManager || !t) return;
+    TextilesService.remove(t.id);
+    refreshTextiles();
+    setTextileDeleteStep1(null);
+    setTextileDeleteStep2(null);
+    setTextileDeleteText("");
   };
 
   // FIX 3.A — kasuje wbudowaną kategorię i przenosi pozycje wyposażenia z tą kategorią
@@ -5225,6 +5382,25 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
     refreshCategories();
   };
 
+  // PAKIET 8a.4 — reorder kategorii widocznych w nawigacji
+  const moveCategory = (id, dir) => {
+    if (!isManager) return;
+    const visible = categories.filter(c => c.showInNav);
+    const idx = visible.findIndex(c => c.id === id);
+    if (idx < 0) return;
+    const newIdx = idx + dir;
+    if (newIdx < 0 || newIdx >= visible.length) return;
+    const reorderedVisible = [...visible];
+    [reorderedVisible[idx], reorderedVisible[newIdx]] = [reorderedVisible[newIdx], reorderedVisible[idx]];
+    const nonVisible = categories.filter(c => !c.showInNav);
+    const reordered = [
+      ...reorderedVisible.map((c, i) => ({ ...c, order: i })),
+      ...nonVisible.map((c, i) => ({ ...c, order: reorderedVisible.length + i })),
+    ];
+    Categories.save(reordered);
+    refreshCategories();
+  };
+
   const refresh = () => setSettings(Settings.getAll());
 
   const startEdit = (type) => {
@@ -5267,11 +5443,14 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
       <ScrollableTabs className="tabs">
         {[
           { id:"general",    label:"OGÓLNE" },
+          { id:"mainview",   label:"WIDOK GŁÓWNY" },
           { id:"categories", label:`KATEGORIE (${categories.length})` },
           { id:"equipment",  label:"WYPOSAŻENIE" },
+          { id:"textiles",   label:"TEKSTYLIA" },
           { id:"team",       label:"ZESPÓŁ" },
           { id:"formbuilder",label:"FORMULARZ" },
           { id:"sms",        label:"SZABLONY SMS" },
+          { id:"api",        label:"API" },
         ].map(t => (
           <div key={t.id} className={`tab ${settingsTab === t.id ? "active" : ""}`}
             onClick={() => setSettingsTab(t.id)} style={{ whiteSpace:"nowrap", flexShrink:0 }}>
@@ -5503,21 +5682,36 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
               Globalne pomieszczenia ({eqRooms.filter(r => !r.aptId).length})
             </div>
             <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"var(--radius)", overflow:"hidden", marginBottom:20 }}>
-              {eqRooms.filter(r => !r.aptId).map(room => (
-                <div key={room.id} style={{ padding:"12px 16px", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", gap:10 }}>
-                  <div style={{ flex:1 }}>
-                    <span style={{ fontSize:14, fontWeight:600 }}>{room.name}</span>
-                    {room.builtin && <span style={{ marginLeft:8, fontSize:9, fontWeight:700, letterSpacing:"0.08em", padding:"2px 6px", borderRadius:4, background:"rgba(59,130,246,0.12)", color:"var(--accent)" }}>WBUDOWANA</span>}
+              {(() => {
+                const globals = eqRooms.filter(r => !r.aptId);
+                return globals.map((room, idx) => (
+                  <div key={room.id} style={{ padding:"10px 14px", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", gap:10 }}>
+                    {/* PAKIET 8a.3 — strzałki kolejności */}
+                    <div style={{ display:"flex", flexDirection:"column", gap:2 }}>
+                      <button onClick={() => moveRoom(room.id, -1)} disabled={idx === 0 || !isManager}
+                        style={{ background:"none", border:"1px solid var(--border)", borderRadius:4, padding:"1px 6px", cursor:"pointer", color:"var(--text2)", fontSize:10, opacity:(idx===0||!isManager)?0.3:1 }}>▲</button>
+                      <button onClick={() => moveRoom(room.id, 1)} disabled={idx === globals.length - 1 || !isManager}
+                        style={{ background:"none", border:"1px solid var(--border)", borderRadius:4, padding:"1px 6px", cursor:"pointer", color:"var(--text2)", fontSize:10, opacity:(idx===globals.length-1||!isManager)?0.3:1 }}>▼</button>
+                    </div>
+                    <div style={{ flex:1 }}>
+                      <span style={{ fontSize:14, fontWeight:600 }}>{room.name}</span>
+                      {room.builtin && <span style={{ marginLeft:8, fontSize:9, fontWeight:700, letterSpacing:"0.08em", padding:"2px 6px", borderRadius:4, background:"rgba(59,130,246,0.12)", color:"var(--accent)" }}>WBUDOWANA</span>}
+                    </div>
+                    {/* PAKIET 8a.3 — edycja nazwy */}
+                    {isManager && (
+                      <button onClick={() => setEditingRoom({ ...room })} title="Edytuj nazwę"
+                        style={{ background:"none", border:"1px solid var(--border)", borderRadius:6, padding:"4px 8px", cursor:"pointer", color:"var(--text)", fontSize:12 }}>✏</button>
+                    )}
+                    {isManager && !room.builtin && (
+                      <button onClick={() => deleteRoom(room.id)} style={{ background:"rgba(239,68,68,0.12)", border:"none", borderRadius:8, padding:"6px 10px", cursor:"pointer", color:"var(--red)", fontSize:11, fontWeight:700 }}>🗑</button>
+                    )}
+                    {/* FIX 3.A — wbudowane też można usunąć (tylko manager), ale dopiero po podwójnym potwierdzeniu; mocniejszy czerwony */}
+                    {isManager && room.builtin && (
+                      <button onClick={() => { setRoomDeleteText(""); setRoomDeleteStep1(room); }} title="Usuń wbudowaną kategorię (wymaga podwójnego potwierdzenia)" style={{ background:"var(--red)", border:"none", borderRadius:8, padding:"6px 12px", cursor:"pointer", color:"#fff", fontSize:11, fontWeight:700 }}>🗑 Usuń</button>
+                    )}
                   </div>
-                  {isManager && !room.builtin && (
-                    <button onClick={() => deleteRoom(room.id)} style={{ background:"rgba(239,68,68,0.12)", border:"none", borderRadius:8, padding:"6px 10px", cursor:"pointer", color:"var(--red)", fontSize:11, fontWeight:700 }}>🗑</button>
-                  )}
-                  {/* FIX 3.A — wbudowane też można usunąć (tylko manager), ale dopiero po podwójnym potwierdzeniu; mocniejszy czerwony */}
-                  {isManager && room.builtin && (
-                    <button onClick={() => { setRoomDeleteText(""); setRoomDeleteStep1(room); }} title="Usuń wbudowaną kategorię (wymaga podwójnego potwierdzenia)" style={{ background:"var(--red)", border:"none", borderRadius:8, padding:"6px 12px", cursor:"pointer", color:"#fff", fontSize:11, fontWeight:700 }}>🗑 Usuń</button>
-                  )}
-                </div>
-              ))}
+                ));
+              })()}
             </div>
 
             {/* Per-apt */}
@@ -5605,6 +5799,114 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
                 disabled={roomDeleteText !== roomDeleteStep2.name}
                 onClick={() => deleteBuiltinRoom(roomDeleteStep2)}
                 style={{ flex:1, border:"none", fontWeight:700, background: roomDeleteText === roomDeleteStep2.name ? "var(--red)" : "var(--surface2)", color: roomDeleteText === roomDeleteStep2.name ? "#fff" : "var(--text2)", cursor: roomDeleteText === roomDeleteStep2.name ? "pointer" : "not-allowed" }}
+              >Usuń definitywnie</button>
+            </div>
+          </FloatingModal>
+        )}
+
+        {/* PAKIET 8a.3 — Modal edycji nazwy pomieszczenia */}
+        {editingRoom && (
+          <FloatingModal open onClose={() => setEditingRoom(null)} title="Edytuj pomieszczenie" size="sm">
+            <div className="form-group">
+              <label className="form-label">Nazwa pomieszczenia *</label>
+              <input
+                className="form-input"
+                value={editingRoom.name || ""}
+                onChange={e => setEditingRoom(r => ({ ...r, name: e.target.value }))}
+                placeholder="np. Salon, Sypialnia, Łazienka"
+                onKeyDown={e => { if (e.key === "Enter") saveRoomEdit(); }}
+                style={{ width:"100%", boxSizing:"border-box" }}
+              />
+            </div>
+            <div className="btn-row" style={{ display:"flex", gap:10 }}>
+              <button className="btn btn-ghost" style={{ flex:1 }} onClick={() => setEditingRoom(null)}>Anuluj</button>
+              <button className="btn btn-primary" style={{ flex:1 }} disabled={!editingRoom.name || !editingRoom.name.trim()} onClick={saveRoomEdit}>Zapisz</button>
+            </div>
+          </FloatingModal>
+        )}
+
+        {/* PAKIET 8a.1 — Modal dodawania/edycji tekstyliów */}
+        {editingTextile && (
+          <FloatingModal open onClose={() => setEditingTextile(null)} title={editingTextile.create ? "Nowa pozycja tekstyliów" : `Edytuj: ${editingTextile.name || ""}`} size="sm">
+            <div className="form-group">
+              <label className="form-label">Nazwa *</label>
+              <input
+                className="form-input"
+                value={editingTextile.name || ""}
+                onChange={e => setEditingTextile(t => ({ ...t, name: e.target.value }))}
+                placeholder="np. Kołdra, Poduszka, Ręcznik duży"
+                style={{ width:"100%", boxSizing:"border-box" }}
+              />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Rozmiar</label>
+              <input
+                className="form-input"
+                value={editingTextile.size || ""}
+                onChange={e => setEditingTextile(t => ({ ...t, size: e.target.value }))}
+                placeholder="np. 160/200, 50/70"
+                onKeyDown={e => { if (e.key === "Enter") saveTextileEdit(); }}
+                style={{ width:"100%", boxSizing:"border-box" }}
+              />
+            </div>
+            <div className="btn-row" style={{ display:"flex", gap:10 }}>
+              <button className="btn btn-ghost" style={{ flex:1 }} onClick={() => setEditingTextile(null)}>Anuluj</button>
+              <button className="btn btn-primary" style={{ flex:1 }} disabled={!editingTextile.name || !editingTextile.name.trim()} onClick={saveTextileEdit}>Zapisz</button>
+            </div>
+          </FloatingModal>
+        )}
+
+        {/* PAKIET 8a.1 — Usuwanie tekstyliów: zwykłe = jeden confirm, wbudowane = double-confirm z przepisaniem nazwy */}
+        {textileDeleteStep1 && !textileDeleteStep1.builtin && (
+          <ConfirmModal
+            open
+            variant="danger"
+            title="Usunąć tę pozycję?"
+            message={<><strong style={{ color:"var(--text)" }}>{textileDeleteStep1.name}</strong> zniknie z listy globalnych tekstyliów. Istniejące apartamenty zachowają już dodane pozycje.</>}
+            confirmLabel="Tak, usuń"
+            cancelLabel="Anuluj"
+            onClose={() => setTextileDeleteStep1(null)}
+            onConfirm={() => confirmDeleteTextile(textileDeleteStep1)}
+          />
+        )}
+        {textileDeleteStep1 && textileDeleteStep1.builtin && (
+          <ConfirmModal
+            open
+            variant="danger"
+            title="Czy na pewno chcesz usunąć wbudowaną pozycję?"
+            message={<>
+              <strong style={{ color:"var(--text)" }}>{textileDeleteStep1.name}</strong> jest pozycją wbudowaną — była częścią domyślnej konfiguracji aplikacji.<br /><br />
+              Po usunięciu nie pojawi się przy tworzeniu wyposażenia nowych apartamentów ani jako podpowiedź w zamówieniach. Operacja jest nieodwracalna.<br /><br />
+              Czy na pewno chcesz kontynuować?
+            </>}
+            confirmLabel="Tak, kontynuuj"
+            cancelLabel="Anuluj"
+            onClose={() => setTextileDeleteStep1(null)}
+            onConfirm={() => { const t = textileDeleteStep1; setTextileDeleteStep1(null); setTextileDeleteText(""); setTextileDeleteStep2(t); }}
+          />
+        )}
+        {textileDeleteStep2 && (
+          <FloatingModal open onClose={() => { setTextileDeleteStep2(null); setTextileDeleteText(""); }} title="Ostateczne potwierdzenie" size="sm">
+            <p style={{ fontSize:14, lineHeight:1.6, marginBottom:12 }}>
+              Wpisz nazwę pozycji poniżej, żeby potwierdzić usunięcie:<br />
+              <strong style={{ color:"var(--red)" }}>{textileDeleteStep2.name}</strong>
+            </p>
+            <input
+              className="form-input"
+              autoFocus
+              value={textileDeleteText}
+              onChange={e => setTextileDeleteText(e.target.value)}
+              placeholder="Wpisz dokładną nazwę…"
+              style={{ width:"100%", boxSizing:"border-box", marginBottom:14 }}
+              onKeyDown={e => { if (e.key === "Enter" && textileDeleteText === textileDeleteStep2.name) confirmDeleteTextile(textileDeleteStep2); }}
+            />
+            <div className="btn-row" style={{ display:"flex", gap:10 }}>
+              <button className="btn btn-ghost" style={{ flex:1 }} onClick={() => { setTextileDeleteStep2(null); setTextileDeleteText(""); }}>Anuluj</button>
+              <button
+                className="btn"
+                disabled={textileDeleteText !== textileDeleteStep2.name}
+                onClick={() => confirmDeleteTextile(textileDeleteStep2)}
+                style={{ flex:1, border:"none", fontWeight:700, background: textileDeleteText === textileDeleteStep2.name ? "var(--red)" : "var(--surface2)", color: textileDeleteText === textileDeleteStep2.name ? "#fff" : "var(--text2)", cursor: textileDeleteText === textileDeleteStep2.name ? "pointer" : "not-allowed" }}
               >Usuń definitywnie</button>
             </div>
           </FloatingModal>
@@ -5750,6 +6052,127 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
           </div>
           );
         })()}
+
+        {/* ═══ PAKIET 8a.1 — TEKSTYLIA (globalna lista edytowalna) ═══ */}
+        {settingsTab === "textiles" && (
+          <div>
+            <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:12 }}>
+              Standardowe tekstylia
+            </div>
+            <p style={{ fontSize:13, color:"var(--text2)", marginBottom:16, lineHeight:1.6 }}>
+              Lista bazowych elementów tekstyliów używana przy tworzeniu wyposażenia nowych apartamentów oraz w zamówieniach.
+              Możesz edytować nazwy/rozmiary, dodawać własne pozycje i usuwać niepotrzebne.
+            </p>
+
+            <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"var(--radius)", overflow:"hidden", marginBottom:14 }}>
+              {textiles.map((t, idx) => (
+                <div key={t.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderBottom:"1px solid var(--border)" }}>
+                  <div style={{ display:"flex", flexDirection:"column", gap:2 }}>
+                    <button onClick={() => moveTextile(t.id, -1)} disabled={idx === 0 || !isManager}
+                      style={{ background:"none", border:"1px solid var(--border)", borderRadius:4, padding:"1px 6px", cursor:"pointer", color:"var(--text2)", fontSize:10, opacity:(idx===0||!isManager)?0.3:1 }}>▲</button>
+                    <button onClick={() => moveTextile(t.id, 1)} disabled={idx === textiles.length - 1 || !isManager}
+                      style={{ background:"none", border:"1px solid var(--border)", borderRadius:4, padding:"1px 6px", cursor:"pointer", color:"var(--text2)", fontSize:10, opacity:(idx===textiles.length-1||!isManager)?0.3:1 }}>▼</button>
+                  </div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:14, fontWeight:600 }}>{t.name}</div>
+                    <div style={{ fontSize:11, color:"var(--text2)", marginTop:2 }}>Rozmiar: {t.size || "—"}</div>
+                  </div>
+                  {t.builtin
+                    ? <span style={{ fontSize:9, fontWeight:700, letterSpacing:"0.08em", padding:"2px 6px", borderRadius:4, background:"rgba(59,130,246,0.12)", color:"var(--accent)" }}>WBUDOWANE</span>
+                    : <span style={{ fontSize:9, fontWeight:700, letterSpacing:"0.08em", padding:"2px 6px", borderRadius:4, background:"rgba(234,179,8,0.12)", color:"var(--yellow)" }}>WŁASNE</span>}
+                  {isManager && (
+                    <>
+                      <button onClick={() => setEditingTextile({ ...t })} title="Edytuj"
+                        style={{ background:"none", border:"1px solid var(--border)", borderRadius:6, padding:"4px 8px", cursor:"pointer", color:"var(--text)", fontSize:12 }}>✏</button>
+                      <button onClick={() => handleDeleteTextile(t)} title={t.builtin ? "Usuń wbudowane (wymaga podwójnego potwierdzenia)" : "Usuń"}
+                        style={{ background: t.builtin ? "var(--red)" : "rgba(239,68,68,0.12)", border:"none", borderRadius:8, padding:"4px 10px", cursor:"pointer", color: t.builtin ? "#fff" : "var(--red)", fontSize:11, fontWeight:700 }}>🗑</button>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {isManager && (
+              <button className="btn btn-primary" onClick={() => setEditingTextile({ create:true, name:"", size:"" })}>+ Dodaj tekstylia</button>
+            )}
+          </div>
+        )}
+
+        {/* ═══ PAKIET 8a.4 — WIDOK GŁÓWNY (kolejność kategorii w sidebar) ═══ */}
+        {settingsTab === "mainview" && (
+          <div>
+            <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:12 }}>
+              Kolejność kategorii w menu
+            </div>
+            <p style={{ fontSize:13, color:"var(--text2)", marginBottom:16, lineHeight:1.6 }}>
+              Ułóż kategorie w preferowanej kolejności. Zmiany widoczne natychmiast w menu po lewej (lub na górze).
+            </p>
+
+            <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:"var(--radius)", overflow:"hidden" }}>
+              {categories.filter(c => c.showInNav).map((cat, idx, arr) => (
+                <div key={cat.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderBottom:"1px solid var(--border)" }}>
+                  <div style={{ display:"flex", flexDirection:"column", gap:2 }}>
+                    <button onClick={() => moveCategory(cat.id, -1)} disabled={idx === 0 || !isManager}
+                      style={{ background:"none", border:"1px solid var(--border)", borderRadius:4, padding:"1px 6px", cursor:"pointer", color:"var(--text2)", fontSize:10, opacity:(idx===0||!isManager)?0.3:1 }}>▲</button>
+                    <button onClick={() => moveCategory(cat.id, 1)} disabled={idx === arr.length - 1 || !isManager}
+                      style={{ background:"none", border:"1px solid var(--border)", borderRadius:4, padding:"1px 6px", cursor:"pointer", color:"var(--text2)", fontSize:10, opacity:(idx===arr.length-1||!isManager)?0.3:1 }}>▼</button>
+                  </div>
+                  {cat.icon && <Icon name={cat.icon} size={18} color={cat.color} />}
+                  <div style={{ flex:1, minWidth:0, fontWeight:600 }}>{cat.name}</div>
+                  <div style={{ fontSize:11, color:"var(--text2)" }}>
+                    {apartments.filter(a => a.status === cat.name).length} apt.
+                  </div>
+                </div>
+              ))}
+              {categories.filter(c => c.showInNav).length === 0 && (
+                <div style={{ padding:14, fontSize:13, color:"var(--text2)" }}>
+                  Brak kategorii widocznych w nawigacji. Włącz „Pokaż w menu" w zakładce KATEGORIE.
+                </div>
+              )}
+            </div>
+
+            {categories.filter(c => !c.showInNav).length > 0 && (
+              <p style={{ fontSize:12, color:"var(--text2)", marginTop:12 }}>
+                ℹ️ Kategorie ukryte w nawigacji ({categories.filter(c => !c.showInNav).length}) nie pojawiają się na powyższej liście. Edytuj je w zakładce KATEGORIE aby je pokazać.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* ═══ PAKIET 8a.2 — API (integracje zewnętrzne) ═══ */}
+        {settingsTab === "api" && (
+          <div>
+            <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:12 }}>
+              Integracje API
+            </div>
+            <p style={{ fontSize:13, color:"var(--text2)", marginBottom:20, lineHeight:1.6 }}>
+              Konfiguracja zewnętrznych usług i synchronizacji.
+            </p>
+
+            {/* KW Hotel — przeniesione z nawigacji */}
+            <div style={{ border:"1px solid var(--border)", borderRadius:12, padding:16, marginBottom:16, background:"var(--surface)" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:14, flexWrap:"wrap" }}>
+                <Icon name="building" size={20} />
+                <div style={{ flex:"1 1 200px", minWidth:0 }}>
+                  <div style={{ fontWeight:600, fontSize:15, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>KW Hotel</div>
+                  <div style={{ fontSize:12, color:"var(--text2)", marginTop:2 }}>Synchronizacja rezerwacji i statusów</div>
+                </div>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => onOpenKw && onOpenKw()}
+                  style={{ width:"auto", flex:"0 0 auto", padding:"8px 16px", fontSize:13, whiteSpace:"nowrap" }}
+                >Otwórz panel KW</button>
+              </div>
+              <div style={{ fontSize:12, color:"var(--text2)", lineHeight:1.5 }}>
+                Konfiguracja loginu KW dla każdego właściciela znajduje się w sekcji <strong>Właściciele</strong>.
+              </div>
+            </div>
+
+            <div style={{ fontSize:12, color:"var(--text2)", marginTop:24, textAlign:"center", padding:20, border:"1px dashed var(--border)", borderRadius:8 }}>
+              Wkrótce: więcej integracji (Booking.com, Airbnb)
+            </div>
+          </div>
+        )}
 
         {/* ═══ SZABLONY SMS ═══ */}
         {settingsTab === "sms" && (
@@ -6200,7 +6623,7 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
   const [textiles, setTextiles] = useState(() => {
     const stored = Storage.get(`apt_text_${apt.id}`);
     if (stored) return stored;
-    return STANDARD_TEXTILES.map((t, i) => ({
+    return TextilesService.getAll().map((t, i) => ({
       id: i + 1, name: t.name, size: t.size, qty: apt.capacity >= 6 ? 6 : 4,
     }));
   });
@@ -6995,7 +7418,7 @@ const ApartmentDetail = ({ apt, owner, tasks, cleaningSessions, loans, apartment
                       style={{ width:"100%" }}
                     />
                     <datalist id={`order-items-${idx}`}>
-                      {ORDER_ITEMS.map(name => <option key={name} value={name} />)}
+                      {getOrderItems().map(name => <option key={name} value={name} />)}
                     </datalist>
                   </div>
                   <NumberInput
@@ -8218,6 +8641,7 @@ export default function App() {
   const [taskFilter, setTaskFilter] = useState("Wszystkie");
   const [taskSearch, setTaskSearch] = useState(""); // FIX 9.4
   const [kwSyncing, setKwSyncing] = useState(false);
+  const [showKwModal, setShowKwModal] = useState(false); // PAKIET 8a.2 — KW jako modal (otwierany z Ustawienia → API)
   const [showAudit, setShowAudit] = useState(false);
 
   // Hooki z nowej architektury
@@ -8602,13 +9026,17 @@ export default function App() {
   const categoriesInNav = categories.filter(c => c.showInNav);
 
   // PAKIET 7.5 — submenu Ustawień (zakładki SettingsView)
+  // PAKIET 8a — kolejność odzwierciedla układ ScrollableTabs w SettingsView
   const settingsSubItems = [
     { id: "general",     label: "Ogólne" },
+    { id: "mainview",    label: "Widok główny" },
     { id: "categories",  label: "Kategorie" },
     { id: "equipment",   label: "Wyposażenie" },
+    { id: "textiles",    label: "Tekstylia" },
     { id: "team",        label: "Zespół" },
     { id: "formbuilder", label: "Formularz" },
     { id: "sms",         label: "Szablony SMS" },
+    { id: "api",         label: "API" },
   ];
 
   // PAKIET 7.4 — wydzielona grupa "Pozostałe" z "Operacji"
@@ -8617,10 +9045,11 @@ export default function App() {
     { id:"tasks",    icon:"tasks", label:"Zadania",  count: taskCount },
     { id:"loans",    icon:"swap",  label:"Pożyczki", count: loanCount },
   ];
+  // PAKIET 8a.2 — KW Hotel usunięte z nawigacji (przeniesione do Ustawienia → API).
+  // Panel KW jest renderowany jako FloatingModal — Settings → API → "Otwórz panel KW" ustawia showKwModal=true.
   const otherItems = [
     { id:"files",    icon:"file",     label:"Pliki" },
     { id:"owners",   icon:"users",    label:"Właściciele" },
-    { id:"kw",       icon:"building", label:"KW Hotel" },
   ];
 
   const renderBadge = (n) => (n > 0 ? <span className="nav-badge">{n}</span> : null);
@@ -9016,6 +9445,7 @@ export default function App() {
           onSetNavPos={setNavPos}
           initialTab={settingsInitialTab}
           initialTabBump={settingsTabBump}
+          onOpenKw={() => setShowKwModal(true)}
         />
       )}
 
@@ -9228,59 +9658,52 @@ export default function App() {
         </>
       )}
 
-      {tab === "kw" && (
-        <>
-          <div className="header">
-            <h1>KW Hotel</h1>
-            <div className="header-actions">
-              <button className="icon-btn" onClick={handleLogout} title="Wyloguj"><Icon name="logout" size={16} /></button>
+      {/* PAKIET 8a.2 — Panel KW jako FloatingModal (otwierany z Ustawienia → API). */}
+      {showKwModal && (
+        <FloatingModal open onClose={() => setShowKwModal(false)} title="KW Hotel" size="lg">
+          <div className="kw-card">
+            <div className="kw-header">
+              <div className="kw-logo">KW</div>
+              <div><div className="kw-title">KW Hotel Integration</div><div className="kw-sub">REST API v2 — połączono</div></div>
+              <div className="sync-dot" style={{ marginLeft:"auto" }} />
             </div>
+            <button className="btn btn-primary" onClick={handleKwSync} style={{ marginTop:4 }}>
+              {kwSyncing ? "Synchronizuję..." : "Synchronizuj teraz"}
+            </button>
           </div>
-          <div className="content">
-            <div className="kw-card">
-              <div className="kw-header">
-                <div className="kw-logo">KW</div>
-                <div><div className="kw-title">KW Hotel Integration</div><div className="kw-sub">REST API v2 — połączono</div></div>
-                <div className="sync-dot" style={{ marginLeft:"auto" }} />
-              </div>
-              <button className="btn btn-primary" onClick={handleKwSync} style={{ marginTop:4 }}>
-                {kwSyncing ? "Synchronizuję..." : "Synchronizuj teraz"}
-              </button>
-            </div>
-            <div style={{ background:"var(--surface)",border:"1px solid var(--border)",borderRadius:"var(--radius)",padding:16,marginBottom:12 }}>
-              <div style={{ fontSize:10,color:"var(--text2)",textTransform:"uppercase",letterSpacing:"0.1em",fontWeight:700,marginBottom:12 }}>Aktywne rezerwacje</div>
-              {apartments.filter(a => a.aptStatus==="Zajęty"||a.aptStatus==="Wolny/Dzisiaj przyjazd").map(a => (
-                <div key={a.id} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid var(--border)" }}>
-                  <div>
-                    <div style={{ fontFamily:"var(--font-display)",fontSize:16,letterSpacing:"0.06em" }}>{a.name}</div>
-                    <div style={{ fontSize:11,color:"var(--text2)",marginTop:2 }}>{a.onlineName}</div>
-                  </div>
-                  <StatusBadge status={a.aptStatus} />
+          <div style={{ background:"var(--surface)",border:"1px solid var(--border)",borderRadius:"var(--radius)",padding:16,marginBottom:12 }}>
+            <div style={{ fontSize:10,color:"var(--text2)",textTransform:"uppercase",letterSpacing:"0.1em",fontWeight:700,marginBottom:12 }}>Aktywne rezerwacje</div>
+            {apartments.filter(a => a.aptStatus==="Zajęty"||a.aptStatus==="Wolny/Dzisiaj przyjazd").map(a => (
+              <div key={a.id} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 0",borderBottom:"1px solid var(--border)" }}>
+                <div>
+                  <div style={{ fontFamily:"var(--font-display)",fontSize:16,letterSpacing:"0.06em" }}>{a.name}</div>
+                  <div style={{ fontSize:11,color:"var(--text2)",marginTop:2 }}>{a.onlineName}</div>
                 </div>
-              ))}
-            </div>
-            <div style={{ background:"var(--surface)",border:"1px solid var(--border)",borderRadius:"var(--radius)",padding:16 }}>
-              <div style={{ fontSize:10,color:"var(--text2)",textTransform:"uppercase",letterSpacing:"0.1em",fontWeight:700,marginBottom:12 }}>Konfiguracja API</div>
-              <div className="form-group"><label className="form-label">API URL</label><input className="form-input" defaultValue="https://api.kwhotel.com/v2/" /></div>
-              <div className="form-group"><label className="form-label">Token</label><input className="form-input" type="password" defaultValue="••••••••••••••••" /></div>
-              <div className="form-group">
-                <label className="form-label">Auto-sync co</label>
-                <select className="form-select">
-                  <option value="5">Co 5 minut</option><option value="15">Co 15 minut</option>
-                  <option value="30" defaultValue>Co 30 minut</option><option value="60">Co godzinę</option>
-                </select>
+                <StatusBadge status={a.aptStatus} />
               </div>
-              <button className="btn btn-primary">Zapisz konfigurację</button>
-            </div>
+            ))}
           </div>
-        </>
+          <div style={{ background:"var(--surface)",border:"1px solid var(--border)",borderRadius:"var(--radius)",padding:16 }}>
+            <div style={{ fontSize:10,color:"var(--text2)",textTransform:"uppercase",letterSpacing:"0.1em",fontWeight:700,marginBottom:12 }}>Konfiguracja API</div>
+            <div className="form-group"><label className="form-label">API URL</label><input className="form-input" defaultValue="https://api.kwhotel.com/v2/" /></div>
+            <div className="form-group"><label className="form-label">Token</label><input className="form-input" type="password" defaultValue="••••••••••••••••" /></div>
+            <div className="form-group">
+              <label className="form-label">Auto-sync co</label>
+              <select className="form-select" defaultValue="30">
+                <option value="5">Co 5 minut</option><option value="15">Co 15 minut</option>
+                <option value="30">Co 30 minut</option><option value="60">Co godzinę</option>
+              </select>
+            </div>
+            <button className="btn btn-primary">Zapisz konfigurację</button>
+          </div>
+        </FloatingModal>
       )}
 
       {/* Mobile "more" menu overlay */}
       {showMoreMenu && (
         <div style={{ position:"fixed", bottom:70, left:0, right:0, zIndex:110, padding:"0 12px" }}>
           <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:16, padding:8, maxWidth:430, margin:"0 auto", boxShadow:"0 -4px 20px rgba(0,0,0,0.3)" }}>
-            {[["owners","users","Właściciele"],["files","file","Pliki"],["loans","swap","Pożyczki"],["kw","building","KW Hotel"],["settings","settings","Ustawienia"]].map(([t, icon, label]) => (
+            {[["owners","users","Właściciele"],["files","file","Pliki"],["loans","swap","Pożyczki"],["settings","settings","Ustawienia"]].map(([t, icon, label]) => (
               <button key={t} onClick={() => { setTab(t); setShowMoreMenu(false); }}
                 style={{ display:"flex", alignItems:"center", gap:12, width:"100%", padding:"12px 16px", background:tab === t ? "var(--surface2)" : "none", border:"none", borderRadius:10, color:tab === t ? "var(--accent)" : "var(--text)", cursor:"pointer", fontSize:14, fontWeight:tab === t ? 700 : 500, fontFamily:"var(--font-body)" }}>
                 <Icon name={icon} size={18} color={tab === t ? "var(--accent)" : "var(--text2)"} />{label}
@@ -9297,7 +9720,7 @@ export default function App() {
             <Icon name={icon} size={20} /><span>{label}</span>
           </button>
         ))}
-        <button className={`nav-item ${showMoreMenu || ["owners","files","loans","kw","settings"].includes(tab) ? "active" : ""}`}
+        <button className={`nav-item ${showMoreMenu || ["owners","files","loans","settings"].includes(tab) ? "active" : ""}`}
           onClick={() => setShowMoreMenu(m => !m)}>
           <Icon name="info" size={20} /><span>Więcej</span>
         </button>
