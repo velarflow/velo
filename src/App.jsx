@@ -1665,6 +1665,10 @@ const Loans = {
       status: "active",
       createdBy: loan.createdBy || "",
     };
+    // PAKIET 8b — pola własne ze schemy formularza (loan)
+    if (loan.customFields && typeof loan.customFields === "object") {
+      entry.customFields = { ...loan.customFields };
+    }
     if (entry.items.length === 0) return null;
     if (entry.fromAptId === entry.toAptId) return null;
     this.save([entry, ...this.getAll()]);
@@ -1822,28 +1826,89 @@ const DEFAULT_OWNER_FIELDS = [
   { id:"invoiceData",   label:"Dane do faktury",    group:"Umowa i rozliczenia",  type:"textarea", defaultVisible:true, order:33 },
 ];
 
+// PAKIET 8b — pola domyślne dla zadań i pożyczek (overlay strategy: visibility/required + custom only)
+const DEFAULT_TASK_FIELDS = [
+  { id:"apartmentId", label:"Apartament / Lokalizacja", group:"Podstawowe", type:"select",   required:true,  defaultVisible:true, order:1 },
+  { id:"title",       label:"Tytuł zadania",            group:"Podstawowe", type:"text",     required:true,  defaultVisible:true, order:2 },
+  { id:"priority",    label:"Priorytet",                group:"Podstawowe", type:"select",   defaultVisible:true, order:3, options:["high","normal","low"] },
+  { id:"orderBy",     label:"Osoba zlecająca",          group:"Wykonanie",  type:"text",     defaultVisible:true, order:10 },
+  { id:"assignedTo",  label:"Przypisz do",              group:"Wykonanie",  type:"select",   required:true,  defaultVisible:true, order:11 },
+  { id:"nextCheckout",label:"Wyjazd gości",             group:"Terminy",    type:"datetime", defaultVisible:true, order:20 },
+  { id:"nextCheckin", label:"Przyjazd gości",           group:"Terminy",    type:"datetime", defaultVisible:true, order:21 },
+  { id:"notes",       label:"Notatki",                  group:"Dodatkowe",  type:"textarea", defaultVisible:true, order:30 },
+];
+
+const DEFAULT_LOAN_FIELDS = [
+  { id:"fromAptId", label:"Z apartamentu",  group:"Podstawowe", type:"select",   required:true, defaultVisible:true, order:1 },
+  { id:"toAptId",   label:"Do apartamentu", group:"Podstawowe", type:"select",   required:true, defaultVisible:true, order:2 },
+  { id:"items",     label:"Pozycje",        group:"Pozycje",    type:"items",    required:true, defaultVisible:true, order:10 },
+  { id:"notes",     label:"Notatki",        group:"Dodatkowe",  type:"textarea", defaultVisible:true, order:20 },
+];
+
 // Domyślne pola per kategoria + lista kategorii konfigurowalnych formularzy
-const FORM_DEFAULTS = { apartment: DEFAULT_FORM_FIELDS, owner: DEFAULT_OWNER_FIELDS };
+const FORM_DEFAULTS = {
+  apartment: DEFAULT_FORM_FIELDS,
+  owner:     DEFAULT_OWNER_FIELDS,
+  task:      DEFAULT_TASK_FIELDS,
+  loan:      DEFAULT_LOAN_FIELDS,
+};
 const FORM_CATEGORIES = [
   { key: "apartment", label: "Apartament" },
   { key: "owner",     label: "Właściciel" },
+  { key: "task",      label: "Zadanie" },
+  { key: "loan",      label: "Pożyczka" },
 ];
 
 const FormSchema = {
   _key: "form_schema",  // MUST-4: bez prefiksu
 
-  // Cały magazyn { apartment:[...], owner:[...] }. Migruje stary format (płaska tablica = apartament)
-  // oraz dosiewa braki domyślnymi polami danej kategorii.
+  // PAKIET 8b — wyciąga unikalne grupy w kolejności pierwszego wystąpienia po order
+  _deriveGroupOrder(fields) {
+    const sorted = [...fields].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    const seen = new Set();
+    const order = [];
+    sorted.forEach(f => {
+      const g = f.group || "Inne";
+      if (!seen.has(g)) { seen.add(g); order.push(g); }
+    });
+    return order;
+  },
+
+  // PAKIET 8b — buduje wpis kategorii { fields, groupOrder } z listy pól
+  _upgradeCategory(fields) {
+    return { fields, groupOrder: this._deriveGroupOrder(fields) };
+  },
+
+  // Cały magazyn { apartment:{fields,groupOrder}, owner:{...}, task:{...}, loan:{...} }
+  // Migracja: stary format (płaska tablica = apartament) oraz stary format per-kategoria (lista pól).
+  // Dosiewa braki domyślnymi polami danej kategorii.
   _store() {
     const raw = Storage.get(this._key);
-    let store;
-    if (Array.isArray(raw)) store = { apartment: raw };          // migracja ze starego formatu
-    else if (raw && typeof raw === "object") store = { ...raw };
-    else store = {};
-    let changed = Array.isArray(raw);
+    let store = {};
+    let changed = false;
+    if (Array.isArray(raw)) {
+      store.apartment = this._upgradeCategory(raw);
+      changed = true;
+    } else if (raw && typeof raw === "object") {
+      Object.keys(raw).forEach(cat => {
+        const val = raw[cat];
+        if (Array.isArray(val)) {
+          store[cat] = this._upgradeCategory(val);
+          changed = true;
+        } else if (val && Array.isArray(val.fields)) {
+          store[cat] = {
+            fields: val.fields,
+            groupOrder: Array.isArray(val.groupOrder) && val.groupOrder.length
+              ? val.groupOrder
+              : this._deriveGroupOrder(val.fields),
+          };
+          if (!Array.isArray(val.groupOrder) || val.groupOrder.length === 0) changed = true;
+        }
+      });
+    }
     Object.keys(FORM_DEFAULTS).forEach(cat => {
-      if (!Array.isArray(store[cat]) || store[cat].length === 0) {
-        store[cat] = FORM_DEFAULTS[cat].map(f => ({ ...f, visible: f.defaultVisible }));
+      if (!store[cat] || !Array.isArray(store[cat].fields) || store[cat].fields.length === 0) {
+        store[cat] = this._upgradeCategory(FORM_DEFAULTS[cat].map(f => ({ ...f, visible: f.defaultVisible })));
         changed = true;
       }
     });
@@ -1851,12 +1916,62 @@ const FormSchema = {
     return store;
   },
 
-  getAll(cat = "apartment") { return this._store()[cat] || []; },
+  getAll(cat = "apartment") {
+    const s = this._store()[cat];
+    return (s && s.fields) || [];
+  },
 
-  saveCat(cat, fields) {
+  getGroupOrder(cat = "apartment") {
+    const s = this._store()[cat];
+    return (s && s.groupOrder) || [];
+  },
+
+  saveCat(cat, fields, groupOrder) {
     const store = this._store();
-    store[cat] = fields;
+    const prev = store[cat] || { fields: [], groupOrder: [] };
+    store[cat] = {
+      fields,
+      groupOrder: groupOrder || prev.groupOrder || this._deriveGroupOrder(fields),
+    };
     Storage.set(this._key, store);
+  },
+
+  setGroupOrder(cat, groupOrder) {
+    const store = this._store();
+    if (!store[cat]) store[cat] = { fields: [], groupOrder: [] };
+    store[cat].groupOrder = groupOrder;
+    Storage.set(this._key, store);
+  },
+
+  addGroup(cat, groupName) {
+    const order = this.getGroupOrder(cat);
+    if (order.includes(groupName)) return;
+    this.setGroupOrder(cat, [...order, groupName]);
+  },
+
+  renameGroup(cat, oldName, newName) {
+    if (!newName || oldName === newName) return;
+    const order = this.getGroupOrder(cat).map(g => g === oldName ? newName : g);
+    const fields = this.getAll(cat).map(f => f.group === oldName ? { ...f, group: newName } : f);
+    this.saveCat(cat, fields, order);
+  },
+
+  removeGroup(cat, groupName, fallbackGroup = "Inne") {
+    const order = this.getGroupOrder(cat).filter(g => g !== groupName);
+    const fields = this.getAll(cat).map(f => f.group === groupName ? { ...f, group: fallbackGroup } : f);
+    if (!order.includes(fallbackGroup)) order.push(fallbackGroup);
+    this.saveCat(cat, fields, order);
+  },
+
+  moveGroup(cat, groupName, direction) {
+    const order = this.getGroupOrder(cat);
+    const idx = order.indexOf(groupName);
+    if (idx < 0) return;
+    const newIdx = idx + direction;
+    if (newIdx < 0 || newIdx >= order.length) return;
+    const reordered = [...order];
+    [reordered[idx], reordered[newIdx]] = [reordered[newIdx], reordered[idx]];
+    this.setGroupOrder(cat, reordered);
   },
 
   // Widoczne pola posortowane po order
@@ -1888,10 +2003,11 @@ const FormSchema = {
     let id = base.startsWith("custom_") ? base : `custom_${base || Date.now()}`;
     let uid = id, n = 2;
     while (all.some(f => f.id === uid)) uid = `${id}_${n++}`;
+    const groupName = field.group || "Inne";
     const entry = {
       id: uid,
       label,
-      group: field.group || "Inne",
+      group: groupName,
       type: field.type || "text",
       required: !!field.required,
       defaultVisible: true,
@@ -1902,21 +2018,31 @@ const FormSchema = {
     if (entry.type === "select") entry.options = Array.isArray(field.options) ? field.options.filter(o => String(o).trim()) : [];
     if (field.placeholder) entry.placeholder = field.placeholder;
     if (field.defaultValue !== undefined && field.defaultValue !== "") entry.defaultValue = field.defaultValue;
-    this.saveCat(cat, [...all, entry]);
+    // PAKIET 8b — jeśli pole trafia do nowej grupy spoza groupOrder, dopisz ją
+    const order = this.getGroupOrder(cat);
+    const nextOrder = order.includes(groupName) ? order : [...order, groupName];
+    this.saveCat(cat, [...all, entry], nextOrder);
     return entry;
   },
 
   // Aktualizacja właściwości pola (label, required, visible, group, placeholder, defaultValue, options, order;
   // type/options zmienne tylko dla pól własnych — builtin ma typ związany z obiektem)
   updateField(id, changes, cat = "apartment") {
-    this.saveCat(cat, this.getAll(cat).map(f => {
+    const all = this.getAll(cat);
+    const updated = all.map(f => {
       if (f.id !== id) return f;
       const next = { ...f, ...changes, id: f.id };
       if (!f.custom) next.type = f.type; // builtin: typ niezmienny
       if (next.type !== "select") delete next.options;
       else if (!Array.isArray(next.options)) next.options = f.options || [];
       return next;
-    }));
+    });
+    // PAKIET 8b — jeśli zmieniono grupę na nową, dopisz ją do groupOrder
+    let order = this.getGroupOrder(cat);
+    if (changes && changes.group && !order.includes(changes.group)) {
+      order = [...order, changes.group];
+    }
+    this.saveCat(cat, updated, order);
   },
 
   removeField(id, cat = "apartment") {
@@ -1926,7 +2052,7 @@ const FormSchema = {
   // Reset schemy danej kategorii do domyślnej (usuwa pola własne, cofa zmiany)
   resetAll(cat = "apartment") {
     const seed = (FORM_DEFAULTS[cat] || []).map(f => ({ ...f, visible: f.defaultVisible }));
-    this.saveCat(cat, seed);
+    this.saveCat(cat, seed, this._deriveGroupOrder(seed));
     return seed;
   },
 };
@@ -3781,6 +3907,9 @@ const FieldDetailModal = ({ field, groupNames, onSave, onClose }) => {
   const [defaultValue, setDefaultValue] = useState(field ? (field.defaultValue ?? "") : "");
   const [options, setOptions] = useState(field && Array.isArray(field.options) ? [...field.options] : []);
   const [newOption, setNewOption] = useState("");
+  // PAKIET 8b — opcja inline „Nowa grupa…"
+  const [newGroupInline, setNewGroupInline] = useState("");
+  const [showNewGroupInput, setShowNewGroupInput] = useState(false);
 
   const title = isCreate ? "Nowe pole" : `Edytuj pole: ${field.label}${isBuiltin ? " (wbudowane)" : " (własne)"}`;
   const canSave = !!label.trim() && (type !== "select" || options.length > 0);
@@ -3815,9 +3944,23 @@ const FieldDetailModal = ({ field, groupNames, onSave, onClose }) => {
 
       <div className="form-group">
         <label className="form-label">Grupa</label>
-        <select className="form-select" value={group} onChange={e => setGroup(e.target.value)}>
+        <select className="form-select" value={showNewGroupInput ? "__new__" : group} onChange={e => {
+          if (e.target.value === "__new__") { setShowNewGroupInput(true); }
+          else { setShowNewGroupInput(false); setGroup(e.target.value); }
+        }}>
           {[...new Set([...groupNames, group, "Inne"])].filter(Boolean).map(g => <option key={g} value={g}>{g}</option>)}
+          <option value="__new__">+ Nowa grupa…</option>
         </select>
+        {showNewGroupInput && (
+          <input
+            className="form-input"
+            style={{ marginTop:6 }}
+            autoFocus
+            placeholder="Nazwa nowej grupy"
+            value={newGroupInline}
+            onChange={e => { setNewGroupInline(e.target.value); setGroup(e.target.value.trim() || group); }}
+          />
+        )}
       </div>
 
       {type === "select" && (
@@ -3948,6 +4091,7 @@ const SchemaField = ({ field, form, set, touch, hasError }) => {
 const ApartmentForm = ({ apt, owners, onSave, onClose, onGoToSettings, defaultCategory }) => {
   const categoriesRef = useRef(Categories.getAll());
   const schemaFields = useRef(FormSchema.visible());
+  const groupOrderRef = useRef(FormSchema.getGroupOrder("apartment"));
 
   // Build initial form values from schema (wszystkie pola, z wartościami domyślnymi)
   const initValues = {};
@@ -3967,12 +4111,16 @@ const ApartmentForm = ({ apt, owners, onSave, onClose, onGoToSettings, defaultCa
 
   const renderSchemaField = (field) => <SchemaField key={field.id} field={field} form={form} set={set} touch={touch} hasError={hasError} />;
 
-  // Group visible fields
-  const groups = {};
+  // PAKIET 8b — grupowanie po user-defined groupOrder; pola bez grupy lub w nieznanej grupie → orphan-fallback
+  const fieldsByGroup = {};
   schemaFields.current.forEach(f => {
-    if (!groups[f.group]) groups[f.group] = [];
-    groups[f.group].push(f);
+    const g = f.group || "Inne";
+    if (!fieldsByGroup[g]) fieldsByGroup[g] = [];
+    fieldsByGroup[g].push(f);
   });
+  const orderedGroups = groupOrderRef.current;
+  const knownGroups = new Set(orderedGroups);
+  const orphans = schemaFields.current.filter(f => !knownGroups.has(f.group || "Inne"));
 
   return (
     <FloatingModal open onClose={onClose} title={apt ? "Edytuj pozycję" : "Nowa pozycja"}>
@@ -4001,13 +4149,23 @@ const ApartmentForm = ({ apt, owners, onSave, onClose, onGoToSettings, defaultCa
           </select>
         </div>
 
-        {/* Dynamiczne pola pogrupowane */}
-        {Object.entries(groups).map(([groupName, fields]) => (
-          <div key={groupName} style={{ marginBottom:8 }}>
-            <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6, marginTop:8 }}>{groupName}</div>
-            {fields.map(f => renderSchemaField(f))}
+        {/* PAKIET 8b — dynamiczne pola pogrupowane w kolejności groupOrder */}
+        {orderedGroups.map(groupName => {
+          const fields = fieldsByGroup[groupName];
+          if (!fields || fields.length === 0) return null;
+          return (
+            <div key={groupName} style={{ marginBottom:8 }}>
+              <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6, marginTop:8 }}>{groupName}</div>
+              {fields.map(f => renderSchemaField(f))}
+            </div>
+          );
+        })}
+        {orphans.length > 0 && (
+          <div style={{ marginBottom:8 }}>
+            <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6, marginTop:8 }}>Inne</div>
+            {orphans.map(f => renderSchemaField(f))}
           </div>
-        ))}
+        )}
 
         {/* Opcjonalne pola (ukryte) */}
         {hiddenFields.length > 0 && (
@@ -4037,6 +4195,17 @@ const TaskForm = ({ task, apartments, onSave, onClose, onToast }) => {
   // tylko nadpisuje brakujące pola. Wcześniej task={apartmentId:X} powodowało, że
   // assignedTo było undefined → V.required fail bez widocznego błędu.
   const noWorkers = !WORKERS || WORKERS.length === 0;
+  // PAKIET 8b — overlay: FormSchema steruje widocznością builtin oraz pozwala dodać pola własne
+  const taskSchema = useRef(FormSchema.sorted("task"));
+  const taskVisMap = useRef(Object.fromEntries(taskSchema.current.map(f => [f.id, f.visible])));
+  const taskCustomFields = useRef(taskSchema.current.filter(f => f.custom && f.visible));
+  const isVis = (id) => taskVisMap.current[id] !== false;
+
+  const customInit = {};
+  taskCustomFields.current.forEach(f => {
+    customInit[f.id] = f.defaultValue !== undefined ? f.defaultValue : (f.type === "checkbox" ? false : "");
+  });
+
   const defaults = {
     apartmentId: (apartments[0] || {}).id || 1,
     title: "",
@@ -4044,6 +4213,7 @@ const TaskForm = ({ task, apartments, onSave, onClose, onToast }) => {
     status: "Nie rozpoczęto",
     priority: "normal",
     notes: "", nextCheckout: "", nextCheckin: "", orderBy: "", location: "",
+    ...customInit,
   };
   const initial = { ...defaults, ...(task || {}) };
   const { form, set, touch, submit, hasError } = useValidatedForm(initial, "task");
@@ -4081,20 +4251,26 @@ const TaskForm = ({ task, apartments, onSave, onClose, onToast }) => {
             placeholder="Co należy zrobić?" />
           <FieldError msg={hasError("title")} />
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div className="form-group">
-            <label className="form-label">Priorytet</label>
-            <select className="form-select" value={form.priority || "normal"} onChange={e => set("priority", e.target.value)}>
-              <option value="high">🔴 Wysoki</option>
-              <option value="normal">🟡 Normalny</option>
-              <option value="low">🟢 Niski</option>
-            </select>
+        {(isVis("priority") || isVis("orderBy")) && (
+          <div style={{ display: "grid", gridTemplateColumns: isVis("priority") && isVis("orderBy") ? "1fr 1fr" : "1fr", gap: 12 }}>
+            {isVis("priority") && (
+              <div className="form-group">
+                <label className="form-label">Priorytet</label>
+                <select className="form-select" value={form.priority || "normal"} onChange={e => set("priority", e.target.value)}>
+                  <option value="high">🔴 Wysoki</option>
+                  <option value="normal">🟡 Normalny</option>
+                  <option value="low">🟢 Niski</option>
+                </select>
+              </div>
+            )}
+            {isVis("orderBy") && (
+              <div className="form-group">
+                <label className="form-label">Osoba zlecająca</label>
+                <input className="form-input" value={form.orderBy || ""} onChange={e => set("orderBy", e.target.value)} placeholder="Kto zleca?" />
+              </div>
+            )}
           </div>
-          <div className="form-group">
-            <label className="form-label">Osoba zlecająca</label>
-            <input className="form-input" value={form.orderBy || ""} onChange={e => set("orderBy", e.target.value)} placeholder="Kto zleca?" />
-          </div>
-        </div>
+        )}
         <div className="form-group">
           <label className="form-label">Przypisz do <span style={{color:"var(--red)"}}>*</span></label>
           <select className={`form-select ${hasError("assignedTo") ? "input-error" : ""}`}
@@ -4114,18 +4290,30 @@ const TaskForm = ({ task, apartments, onSave, onClose, onToast }) => {
             </select>
           </div>
         )}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <div className="form-group"><label className="form-label">Wyjazd gości</label>
-            <input className="form-input" type="datetime-local" value={form.nextCheckout} onChange={e => set("nextCheckout", e.target.value)} /></div>
-          <div className="form-group"><label className="form-label">Przyjazd gości</label>
-            <input className="form-input" type="datetime-local" value={form.nextCheckin} onChange={e => set("nextCheckin", e.target.value)} /></div>
-        </div>
-        <div className="form-group">
-          <label className="form-label">Notatki</label>
-          <textarea className={`form-textarea ${hasError("notes") ? "input-error" : ""}`}
-            value={form.notes} onChange={e => set("notes", e.target.value)} onBlur={() => touch("notes")} />
-          <FieldError msg={hasError("notes")} />
-        </div>
+        {(isVis("nextCheckout") || isVis("nextCheckin")) && (
+          <div style={{ display: "grid", gridTemplateColumns: isVis("nextCheckout") && isVis("nextCheckin") ? "1fr 1fr" : "1fr", gap: 12 }}>
+            {isVis("nextCheckout") && (
+              <div className="form-group"><label className="form-label">Wyjazd gości</label>
+                <input className="form-input" type="datetime-local" value={form.nextCheckout} onChange={e => set("nextCheckout", e.target.value)} /></div>
+            )}
+            {isVis("nextCheckin") && (
+              <div className="form-group"><label className="form-label">Przyjazd gości</label>
+                <input className="form-input" type="datetime-local" value={form.nextCheckin} onChange={e => set("nextCheckin", e.target.value)} /></div>
+            )}
+          </div>
+        )}
+        {isVis("notes") && (
+          <div className="form-group">
+            <label className="form-label">Notatki</label>
+            <textarea className={`form-textarea ${hasError("notes") ? "input-error" : ""}`}
+              value={form.notes} onChange={e => set("notes", e.target.value)} onBlur={() => touch("notes")} />
+            <FieldError msg={hasError("notes")} />
+          </div>
+        )}
+        {/* PAKIET 8b — pola własne dodane w Ustawienia → Formularz → Zadanie */}
+        {taskCustomFields.current.map(f => (
+          <SchemaField key={f.id} field={f} form={form} set={set} touch={touch} hasError={hasError} />
+        ))}
         <div className="btn-row">
           <button className="btn btn-ghost" onClick={onClose} disabled={saving}>Anuluj</button>
           <button className="btn btn-primary" onClick={handleSave} disabled={saving || noWorkers}>
@@ -4139,6 +4327,7 @@ const TaskForm = ({ task, apartments, onSave, onClose, onToast }) => {
 const OwnerForm = ({ owner, onSave, onClose }) => {
   const schemaFields = useRef(FormSchema.visible("owner"));
   const allFields = useRef(FormSchema.sorted("owner"));
+  const groupOrderRef = useRef(FormSchema.getGroupOrder("owner"));
 
   // Wartości początkowe ze schemy (wszystkie pola, z domyślnymi)
   const initValues = {};
@@ -4150,18 +4339,35 @@ const OwnerForm = ({ owner, onSave, onClose }) => {
   const [showOptional, setShowOptional] = useState(false);
   const hiddenFields = allFields.current.filter(f => !f.visible);
 
-  // Grupowanie widocznych pól
-  const groups = {};
-  schemaFields.current.forEach(f => { if (!groups[f.group]) groups[f.group] = []; groups[f.group].push(f); });
+  // PAKIET 8b — grupowanie po user-defined groupOrder z fallbackiem orphan
+  const fieldsByGroup = {};
+  schemaFields.current.forEach(f => {
+    const g = f.group || "Inne";
+    if (!fieldsByGroup[g]) fieldsByGroup[g] = [];
+    fieldsByGroup[g].push(f);
+  });
+  const orderedGroups = groupOrderRef.current;
+  const knownGroups = new Set(orderedGroups);
+  const orphans = schemaFields.current.filter(f => !knownGroups.has(f.group || "Inne"));
 
   return (
     <FloatingModal open onClose={onClose} title={owner ? "Edytuj właściciela" : "Nowy właściciel"}>
-        {Object.entries(groups).map(([groupName, fields]) => (
-          <div key={groupName} style={{ marginBottom:8 }}>
-            <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6, marginTop:8 }}>{groupName}</div>
-            {fields.map(f => <SchemaField key={f.id} field={f} form={form} set={set} touch={touch} hasError={hasError} />)}
+        {orderedGroups.map(groupName => {
+          const fields = fieldsByGroup[groupName];
+          if (!fields || fields.length === 0) return null;
+          return (
+            <div key={groupName} style={{ marginBottom:8 }}>
+              <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6, marginTop:8 }}>{groupName}</div>
+              {fields.map(f => <SchemaField key={f.id} field={f} form={form} set={set} touch={touch} hasError={hasError} />)}
+            </div>
+          );
+        })}
+        {orphans.length > 0 && (
+          <div style={{ marginBottom:8 }}>
+            <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6, marginTop:8 }}>Inne</div>
+            {orphans.map(f => <SchemaField key={f.id} field={f} form={form} set={set} touch={touch} hasError={hasError} />)}
           </div>
-        ))}
+        )}
 
         {hiddenFields.length > 0 && (
           <div style={{ marginTop:8 }}>
@@ -4427,9 +4633,19 @@ const CleaningTeamView = ({ currentUser, apartments, cleaningSessions, onUpdateS
 const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
   const [showForm, setShowForm] = useState(false);
   const [showReturned, setShowReturned] = useState(false);
+  // PAKIET 8b — overlay: FormSchema steruje widocznością builtin oraz pozwala dodać pola własne
+  const loanSchema = useRef(FormSchema.sorted("loan"));
+  const loanVisMap = useRef(Object.fromEntries(loanSchema.current.map(f => [f.id, f.visible])));
+  const loanCustomFields = useRef(loanSchema.current.filter(f => f.custom && f.visible));
+  const isLoanVis = (id) => loanVisMap.current[id] !== false;
+  const customInit = {};
+  loanCustomFields.current.forEach(f => {
+    customInit[f.id] = f.defaultValue !== undefined ? f.defaultValue : (f.type === "checkbox" ? false : "");
+  });
   const [form, setForm] = useState({
     fromAptId: "", toAptId: "", notes: "",
     items: [{ name:"", qty:1 }],
+    ...customInit,
   });
   const [error, setError] = useState("");
 
@@ -4440,7 +4656,7 @@ const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
   const visible  = showReturned ? returned : active;
 
   const resetForm = () => {
-    setForm({ fromAptId:"", toAptId:"", notes:"", items:[{ name:"", qty:1 }] });
+    setForm({ fromAptId:"", toAptId:"", notes:"", items:[{ name:"", qty:1 }], ...customInit });
     setError("");
   };
 
@@ -4529,12 +4745,18 @@ const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
       if (q > avail) { setError(`Nie można pożyczyć ${q} szt. '${name}' — dostępne tylko ${avail} szt. w apartamencie`); return; }
     }
 
+    // PAKIET 8b — wyciągnij pola własne ze schemy
+    const customFields = {};
+    loanCustomFields.current.forEach(f => {
+      if (form[f.id] !== undefined && form[f.id] !== "") customFields[f.id] = form[f.id];
+    });
     const entry = Loans.add({
       fromAptId: form.fromAptId,
       toAptId: form.toAptId,
       items,
       notes: form.notes,
       createdBy: currentUser && currentUser.name || "",
+      customFields,
     });
     if (!entry) { setError("Nie udało się utworzyć pożyczki"); return; }
     onUpdate && onUpdate();
@@ -4754,15 +4976,27 @@ const LoansView = ({ apartments, loans, onUpdate, currentUser }) => {
               >+ Dodaj kolejną pozycję</button>
             </div>
 
-            <div className="form-group">
-              <label className="form-label">Notatki</label>
-              <textarea
-                className="form-textarea"
-                value={form.notes}
-                onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
-                placeholder="opcjonalnie..."
+            {isLoanVis("notes") && (
+              <div className="form-group">
+                <label className="form-label">Notatki</label>
+                <textarea
+                  className="form-textarea"
+                  value={form.notes}
+                  onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                  placeholder="opcjonalnie..."
+                />
+              </div>
+            )}
+
+            {/* PAKIET 8b — pola własne dodane w Ustawienia → Formularz → Pożyczka */}
+            {loanCustomFields.current.map(f => (
+              <SchemaField key={f.id} field={f}
+                form={form}
+                set={(k, v) => setForm(prev => ({ ...prev, [k]: v }))}
+                touch={() => {}}
+                hasError={() => null}
               />
-            </div>
+            ))}
 
             {error && (
               <div style={{ padding:"8px 10px", background:"rgba(239,68,68,0.12)", border:"1px solid rgba(239,68,68,0.3)", borderRadius:8, fontSize:12, color:"var(--red)", marginBottom:10, fontWeight:600 }}>
@@ -5151,11 +5385,24 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
   // ── Form Builder state ──────────────────────────────────────────────────
   const [formCat, setFormCat] = useState("apartment"); // konfigurowana kategoria formularza
   const [schemaFields, setSchemaFields] = useState(() => FormSchema.sorted("apartment"));
+  const [groupOrder, setGroupOrder] = useState(() => FormSchema.getGroupOrder("apartment"));
   const [fieldModal, setFieldModal] = useState(null); // { field } edycja | { create:true } | null
   const [showSchemaReset, setShowSchemaReset] = useState(false);
   const [deleteFieldId, setDeleteFieldId] = useState(null); // potwierdzenie usunięcia pola własnego
-  const refreshSchema = (cat = formCat) => setSchemaFields(FormSchema.sorted(cat));
-  const changeFormCat = (cat) => { setFormCat(cat); setSchemaFields(FormSchema.sorted(cat)); };
+  // PAKIET 8b — zarządzanie grupami
+  const [newGroupModal, setNewGroupModal] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [editGroupModal, setEditGroupModal] = useState(null); // { oldName, newName }
+  const [deleteGroupConfirm, setDeleteGroupConfirm] = useState(null); // groupName
+  const refreshSchema = (cat = formCat) => {
+    setSchemaFields(FormSchema.sorted(cat));
+    setGroupOrder(FormSchema.getGroupOrder(cat));
+  };
+  const changeFormCat = (cat) => {
+    setFormCat(cat);
+    setSchemaFields(FormSchema.sorted(cat));
+    setGroupOrder(FormSchema.getGroupOrder(cat));
+  };
 
   const toggleFieldVisibility = (id) => {
     const f = schemaFields.find(x => x.id === id);
@@ -5197,6 +5444,40 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
     FormSchema.resetAll(formCat);
     refreshSchema();
     setShowSchemaReset(false);
+  };
+  // PAKIET 8b — handlery zarządzania grupami
+  const moveGroupUp = (name) => {
+    if (!isManager) return;
+    FormSchema.moveGroup(formCat, name, -1);
+    refreshSchema();
+  };
+  const moveGroupDown = (name) => {
+    if (!isManager) return;
+    FormSchema.moveGroup(formCat, name, 1);
+    refreshSchema();
+  };
+  const handleAddGroup = () => {
+    if (!isManager) return;
+    const name = newGroupName.trim();
+    if (!name) return;
+    FormSchema.addGroup(formCat, name);
+    refreshSchema();
+    setNewGroupName("");
+    setNewGroupModal(false);
+  };
+  const handleRenameGroup = () => {
+    if (!isManager || !editGroupModal) return;
+    const next = (editGroupModal.newName || "").trim();
+    if (!next || next === editGroupModal.oldName) { setEditGroupModal(null); return; }
+    FormSchema.renameGroup(formCat, editGroupModal.oldName, next);
+    refreshSchema();
+    setEditGroupModal(null);
+  };
+  const handleDeleteGroup = () => {
+    if (!isManager || !deleteGroupConfirm) return;
+    FormSchema.removeGroup(formCat, deleteGroupConfirm);
+    refreshSchema();
+    setDeleteGroupConfirm(null);
   };
   const addLeader = () => {
     if (!isManager || !newLeader.trim()) return;
@@ -5958,8 +6239,15 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
         {settingsTab === "formbuilder" && (() => {
           const visibleSorted = schemaFields.filter(f => f.visible).sort((a,b) => a.order - b.order);
           const catLabel = (FORM_CATEGORIES.find(c => c.key === formCat) || {}).label || "";
-          const groups = {};
-          schemaFields.forEach(f => { if (!groups[f.group]) groups[f.group] = []; groups[f.group].push(f); });
+          // PAKIET 8b — grupowanie po user-defined groupOrder z fallbackiem orphan
+          const fieldsByGroup = {};
+          schemaFields.forEach(f => {
+            const g = f.group || "Inne";
+            if (!fieldsByGroup[g]) fieldsByGroup[g] = [];
+            fieldsByGroup[g].push(f);
+          });
+          const knownGroups = new Set(groupOrder);
+          const orphanFields = schemaFields.filter(f => !knownGroups.has(f.group || "Inne"));
           return (
           <div>
             <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:12 }}>
@@ -5981,6 +6269,48 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
               Edytuj pola formularza: kliknij ⚙ aby zmienić etykietę, typ, opcje i wartości; przełącz „wymagane" (✱) i „widoczność" (👁); zmień kolejność strzałkami ▲▼. Wbudowanych pól nie można usunąć — tylko ukryć.
             </p>
 
+            {/* PAKIET 8b — sekcja zarządzania grupami */}
+            <div style={{ marginBottom:20, padding:12, background:"var(--surface)", borderRadius:8, border:"1px solid var(--border)" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
+                <div style={{ fontSize:13, fontWeight:600 }}>Grupy formularza ({groupOrder.length})</div>
+                {isManager && (
+                  <button className="btn btn-primary" style={{ padding:"4px 12px", fontSize:12 }}
+                    onClick={() => { setNewGroupName(""); setNewGroupModal(true); }}>+ Nowa grupa</button>
+                )}
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+                {groupOrder.length === 0 && (
+                  <div style={{ fontSize:12, color:"var(--text2)", padding:"6px 0" }}>
+                    Brak grup. Dodaj pierwszą grupę powyżej.
+                  </div>
+                )}
+                {groupOrder.map((groupName, idx) => {
+                  const fieldCount = (fieldsByGroup[groupName] || []).length;
+                  return (
+                    <div key={groupName} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"var(--surface2)", borderRadius:6 }}>
+                      <div style={{ display:"flex", flexDirection:"column", gap:2 }}>
+                        <button onClick={() => moveGroupUp(groupName)} disabled={idx === 0 || !isManager}
+                          style={{ background:"none", border:"1px solid var(--border)", borderRadius:4, padding:"1px 6px", cursor:"pointer", color:"var(--text2)", fontSize:10, opacity:(idx===0||!isManager)?0.3:1 }}>▲</button>
+                        <button onClick={() => moveGroupDown(groupName)} disabled={idx === groupOrder.length - 1 || !isManager}
+                          style={{ background:"none", border:"1px solid var(--border)", borderRadius:4, padding:"1px 6px", cursor:"pointer", color:"var(--text2)", fontSize:10, opacity:(idx===groupOrder.length-1||!isManager)?0.3:1 }}>▼</button>
+                      </div>
+                      <div style={{ flex:1, fontSize:13, fontWeight:600 }}>{groupName}</div>
+                      <span style={{ fontSize:11, color:"var(--text2)" }}>{fieldCount} {plForm(fieldCount, "pole", "pola", "pól")}</span>
+                      {isManager && (
+                        <>
+                          <button onClick={() => setEditGroupModal({ oldName: groupName, newName: groupName })} title="Zmień nazwę"
+                            style={{ background:"none", border:"1px solid var(--border)", borderRadius:6, padding:"4px 8px", cursor:"pointer", color:"var(--text)", fontSize:12 }}>✏</button>
+                          <button onClick={() => setDeleteGroupConfirm(groupName)} title="Usuń grupę"
+                            disabled={fieldCount > 0 && groupOrder.length === 1}
+                            style={{ background:"rgba(239,68,68,0.12)", border:"none", borderRadius:6, padding:"4px 8px", cursor:(fieldCount>0 && groupOrder.length===1)?"not-allowed":"pointer", color:"var(--red)", fontSize:11, fontWeight:700, opacity:(fieldCount>0 && groupOrder.length===1)?0.5:1 }}>🗑</button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
             <div style={{ display:"flex", gap:24, flexWrap:"wrap", alignItems:"flex-start" }}>
               {/* ── LEWA: edycja pól ── */}
               <div style={{ flex:"1 1 380px", minWidth:300 }}>
@@ -5988,7 +6318,10 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
                   <button className="btn btn-primary" style={{ width:"100%", marginBottom:14 }} onClick={() => setFieldModal({ create:true })}>+ Dodaj własne pole</button>
                 )}
 
-                {Object.entries(groups).map(([groupName, fields]) => (
+                {groupOrder.map(groupName => {
+                  const fields = fieldsByGroup[groupName];
+                  if (!fields || fields.length === 0) return null;
+                  return (
                   <div key={groupName} style={{ marginBottom:16 }}>
                     <div style={{ fontSize:10, color:"var(--accent)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6, paddingBottom:4, borderBottom:"1px solid var(--border)" }}>
                       {groupName} ({fields.length})
@@ -6034,7 +6367,33 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
                       </div>
                     ))}
                   </div>
-                ))}
+                  );
+                })}
+
+                {/* PAKIET 8b — pola w grupach spoza groupOrder (fallback) */}
+                {orphanFields.length > 0 && (
+                  <div style={{ marginBottom:16 }}>
+                    <div style={{ fontSize:10, color:"var(--yellow)", fontWeight:700, letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6, paddingBottom:4, borderBottom:"1px solid var(--border)" }}>
+                      Inne / bez grupy ({orphanFields.length})
+                    </div>
+                    {orphanFields.map(f => (
+                      <div key={f.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 0", borderBottom:"1px solid var(--border)" }}>
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ fontSize:13, fontWeight:600, opacity:f.visible?1:0.5 }}>{f.label}</div>
+                          <div style={{ fontSize:10, color:"var(--text2)", display:"flex", gap:8, flexWrap:"wrap" }}>
+                            <span>{f.type}</span>
+                            {!f.visible && <span>ukryte</span>}
+                            <span style={{ color:"var(--yellow)" }}>grupa: {f.group || "—"}</span>
+                          </div>
+                        </div>
+                        {isManager && (
+                          <button onClick={() => setFieldModal({ field:f })} title="Edytuj pole"
+                            style={{ background:"none", border:"1px solid var(--border)", borderRadius:6, padding:"4px 8px", cursor:"pointer", color:"var(--text)", fontSize:12 }}>⚙</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 {isManager && (
                   <button className="btn" style={{ marginTop:4 }} onClick={() => setShowSchemaReset(true)}>↺ Reset do domyślnych</button>
@@ -6331,11 +6690,81 @@ const SettingsView = ({ apartments, currentUser, onCategoriesChange, theme, onTo
       {fieldModal && (
         <FieldDetailModal
           field={fieldModal.field || null}
-          groupNames={[...new Set(schemaFields.map(f => f.group))]}
+          groupNames={groupOrder.length ? groupOrder : [...new Set(schemaFields.map(f => f.group))]}
           onSave={saveFieldModal}
           onClose={() => setFieldModal(null)}
         />
       )}
+
+      {/* PAKIET 8b — Modal: nowa grupa */}
+      {newGroupModal && (
+        <FloatingModal open onClose={() => { setNewGroupModal(false); setNewGroupName(""); }} title="Nowa grupa" size="sm">
+          <div className="form-group">
+            <label className="form-label">Nazwa grupy *</label>
+            <input
+              className="form-input"
+              autoFocus
+              value={newGroupName}
+              onChange={e => setNewGroupName(e.target.value)}
+              placeholder="np. Dodatkowe, Marketing, Linki"
+              onKeyDown={e => { if (e.key === "Enter" && newGroupName.trim()) handleAddGroup(); }}
+              style={{ width:"100%", boxSizing:"border-box" }}
+            />
+          </div>
+          <div className="btn-row" style={{ display:"flex", gap:10 }}>
+            <button className="btn btn-ghost" style={{ flex:1 }} onClick={() => { setNewGroupModal(false); setNewGroupName(""); }}>Anuluj</button>
+            <button className="btn btn-primary" style={{ flex:1 }} disabled={!newGroupName.trim() || groupOrder.includes(newGroupName.trim())} onClick={handleAddGroup}>Dodaj</button>
+          </div>
+          {newGroupName.trim() && groupOrder.includes(newGroupName.trim()) && (
+            <div style={{ marginTop:10, fontSize:12, color:"var(--yellow)" }}>
+              Grupa o tej nazwie już istnieje.
+            </div>
+          )}
+        </FloatingModal>
+      )}
+
+      {/* PAKIET 8b — Modal: zmiana nazwy grupy */}
+      {editGroupModal && (
+        <FloatingModal open onClose={() => setEditGroupModal(null)} title={`Zmień nazwę grupy: ${editGroupModal.oldName}`} size="sm">
+          <div className="form-group">
+            <label className="form-label">Nowa nazwa *</label>
+            <input
+              className="form-input"
+              autoFocus
+              value={editGroupModal.newName || ""}
+              onChange={e => setEditGroupModal(g => ({ ...g, newName: e.target.value }))}
+              placeholder="Nowa nazwa grupy"
+              onKeyDown={e => { if (e.key === "Enter" && editGroupModal.newName.trim()) handleRenameGroup(); }}
+              style={{ width:"100%", boxSizing:"border-box" }}
+            />
+          </div>
+          <div className="btn-row" style={{ display:"flex", gap:10 }}>
+            <button className="btn btn-ghost" style={{ flex:1 }} onClick={() => setEditGroupModal(null)}>Anuluj</button>
+            <button className="btn btn-primary" style={{ flex:1 }}
+              disabled={!editGroupModal.newName || !editGroupModal.newName.trim() || editGroupModal.newName.trim() === editGroupModal.oldName || (groupOrder.includes(editGroupModal.newName.trim()) && editGroupModal.newName.trim() !== editGroupModal.oldName)}
+              onClick={handleRenameGroup}>Zapisz</button>
+          </div>
+        </FloatingModal>
+      )}
+
+      {/* PAKIET 8b — Confirm: usunięcie grupy */}
+      {deleteGroupConfirm && (() => {
+        const cnt = schemaFields.filter(f => f.group === deleteGroupConfirm).length;
+        return (
+          <ConfirmModal
+            open
+            variant="danger"
+            title={`Usunąć grupę „${deleteGroupConfirm}"?`}
+            message={cnt > 0
+              ? <>Grupa zawiera <strong>{cnt} {plForm(cnt, "pole", "pola", "pól")}</strong>. Pola zostaną przeniesione do grupy „Inne". Kontynuować?</>
+              : <>Usunąć pustą grupę „{deleteGroupConfirm}"?</>}
+            confirmLabel="Usuń"
+            cancelLabel="Anuluj"
+            onClose={() => setDeleteGroupConfirm(null)}
+            onConfirm={handleDeleteGroup}
+          />
+        );
+      })()}
 
       {/* ═══ Reset schemy formularza ═══ */}
       <ConfirmModal
